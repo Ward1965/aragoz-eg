@@ -1,2 +1,0 @@
-# aragoz
-Config Scrapper
