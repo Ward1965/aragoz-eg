@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ar" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aragoz Lite</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark">
+
+    <div id="toast-container"></div>
+
+    <div class="app">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h1 class="logo">Aragoz Lite</h1>
+                <div class="header-btns">
+                    <button id="aboutBtn" class="icon-btn" title="About">ℹ</button>
+                    <button id="themeToggle" class="icon-btn" title="Toggle Theme">☀</button>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Sources</h3>
+                <div class="url-input-wrap">
+                    <textarea id="urlInput" placeholder="Enter subscription URLs — one http/https link per line." rows="4"></textarea>
+                    <small class="url-hint">Only subscription links (http/https). NOT config lines like vmess:// — use <em>Import/Paste</em> for those.</small>
+                </div>
+                <div class="btn-stack">
+                    <button id="fetchBtn" class="btn btn-primary btn-full btn-icon" title="Fetch configs from the URLs above — disabled while Sources is empty">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 17 18z"/><path d="M10 14l2 2 2-2M12 11v5"/></svg>Fetch
+                    </button>
+                    <button id="importFileBtn" class="btn btn-secondary btn-full btn-icon" title="Import configs from a file">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 16v-5M9.5 13.5 12 11l2.5 2.5"/></svg>Import File
+                    </button>
+                    <button id="scanWebBtn" class="btn btn-scan btn-full btn-icon" title="Search the web and load proxies automatically">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg>Scan Web (Auto)
+                    </button>
+                    <button id="tgFetchBtn" class="btn btn-secondary btn-full btn-icon" title="Fetch configs from Telegram channels (157 built-in channels, or ones you type in Sources)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>Fetch from Telegram
+                    </button>
+                </div>
+                <div id="discoveredBox" style="display:none;margin-top:8px">
+                    <h3>Discovered Sources</h3>
+                    <div id="discoveredList"></div>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Manual</h3>
+                <div class="btn-stack">
+                    <button id="importRawBtn" class="btn btn-secondary btn-full btn-icon" title="Paste raw configs manually">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 4.5A2.5 2.5 0 0 1 11.5 2h1A2.5 2.5 0 0 1 15 4.5V6H9z"/></svg>Import Raw Text
+                    </button>
+                </div>
+                <textarea id="rawTextInput" placeholder="Or paste raw configs here..." rows="3" style="display:none;margin-top:6px"></textarea>
+                <div id="rawSubmitRow" style="display:none;margin-top:4px">
+                    <button id="rawSubmitBtn" class="btn btn-primary btn-full btn-icon" title="Parse and load the pasted configs">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-8-8 18-2-7z"/><path d="M13 11 21 3"/></svg>Submit Raw
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Filter by Protocol</h3>
+                <div id="protocolFilters"></div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Filter by Country</h3>
+                <div id="countryFilters"></div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Copy to Clipboard</h3>
+                <div class="btn-stack">
+                    <button id="exportTextBtn" class="btn btn-secondary btn-full btn-icon" title="Copies all raw configs to the clipboard">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy as Text
+                    </button>
+                    <button id="exportB64Btn" class="btn btn-secondary btn-full btn-icon" title="Copies a Base64 subscription link to the clipboard">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>Copy as Base64
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Export Files</h3>
+                <div class="export-row">
+                    <select id="exportFormat" class="export-select">
+                        <option value="txt">Text (.txt)</option>
+                        <option value="b64">Base64 Subscription (.b64)</option>
+                        <option value="json">JSON (.json)</option>
+                        <option value="yaml">Clash YAML (.yaml)</option>
+                    </select>
+                    <button id="exportFileBtn" class="btn btn-primary btn-icon" title="Save selected format as a file">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><path d="M12 3v12M8 11l4 4 4-4"/></svg>Export
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Danger Zone</h3>
+                <button id="clearAllBtn" class="btn btn-danger btn-full btn-icon" title="Delete all configs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg>Clear All
+                </button>
+            </div>
+        </aside>
+
+        <main class="content">
+            <div class="toolbar">
+                <div class="search-wrap">
+                    <input type="text" id="searchInput" placeholder="Search name, server, protocol..." class="search-box">
+                    <button id="clearSearchBtn" class="icon-btn search-clear" title="Clear search">✕</button>
+                </div>
+                <span id="configCount" class="count-label">0 configs</span>
+                <div class="table-nav">
+                    <button id="topBtn" class="btn btn-sm btn-secondary" title="Scroll to the top of the table">Top</button>
+                    <button id="bottomBtn" class="btn btn-sm btn-secondary" title="Scroll to the bottom of the table">Bottom</button>
+                </div>
+            </div>
+
+            <div class="table-wrapper">
+                <div id="emptyState" class="empty-state">
+                    <h3>No configs yet</h3>
+                    <p>Add URLs and press <strong>Fetch</strong>, click <strong>Scan Web (Auto)</strong>, or import a file to get started.</p>
+                </div>
+                <table id="configTable" class="table-bordered" style="display:none">
+                    <thead>
+                        <tr>
+                            <th class="row-no" title="Row number">#</th>
+                            <th class="sortable" data-key="name">Name / Remark <span class="sort-indicator"></span></th>
+                            <th class="sortable" data-key="protocol">Protocol <span class="sort-indicator"></span></th>
+                            <th class="sortable" data-key="server">Server <span class="sort-indicator"></span></th>
+                            <th class="sortable" data-key="port">Port <span class="sort-indicator"></span></th>
+                            <th class="sortable" data-key="country">Country <span class="sort-indicator"></span></th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="configBody"></tbody>
+                </table>
+            </div>
+        </main>
+    </div>
+
+    <div id="welcomeOverlay" class="welcome-overlay">
+        <div class="welcome-card">
+            <img id="welcomeLogo" src="" alt="Aragoz Lite">
+            <h2>Welcome to <span class="welcome-accent">Aragoz Lite</span> <span class="welcome-version">v1.0</span></h2>
+            <p class="welcome-desc">Your all-in-one proxy config manager.</p>
+            <ul class="welcome-features">
+                <li>fetch subscriptions</li>
+                <li>scan the web</li>
+                <li>import your own configs</li>
+            </ul>
+            <p class="welcome-info"><span class="flag-em"><img src="https://flagcdn.com/w40/eg.png" alt="EG" width="18" height="13" loading="lazy"></span> Egypt - Port Said</p>
+            <div class="welcome-btn-row">
+                <button id="welcomeClose" class="btn btn-primary">Get Started</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="progressOverlay" class="progress-overlay" style="display:none">
+        <div class="progress-card">
+            <div class="spinner"></div>
+            <div id="progressText" class="progress-text">Working...</div>
+            <div class="progress-bar-wrap">
+                <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <div id="progressCount" class="progress-count">0 configs</div>
+            <button id="cancelScanBtn" class="btn btn-secondary btn-icon btn-cancel" title="Stop the current scan">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Cancel (Esc)
+                    </button>
+        </div>
+    </div>
+
+    <div id="detailModal" class="modal" style="display:none">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Config Details</h2>
+                <button id="modalClose" class="icon-btn">&times;</button>
+            </div>
+            <div id="modalBody" class="modal-body"></div>
+            <div class="modal-footer">
+                <button id="modalCopyRaw" class="btn btn-primary">Copy Raw</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="qrModal" class="modal" style="display:none">
+        <div class="modal-content qr-modal">
+            <div class="modal-header">
+                <h2>QR Code</h2>
+                <button id="qrClose" class="icon-btn">&times;</button>
+            </div>
+            <div class="modal-body qr-body">
+                <div id="qrContainer" class="qr-container"></div>
+                <div id="qrText" class="qr-text"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="qrCopyBtn" class="btn btn-primary">Copy Link</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
