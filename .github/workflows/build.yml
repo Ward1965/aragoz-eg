@@ -31,8 +31,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcairo2-dev pkg-config libgirepository1.0-dev \
-            gir1.2-webkit2-4.1 gir1.2-webkit2-4.0 || true
+          sudo apt-get install -y pkg-config libcairo2-dev libgirepository1.0-dev \
+            gir1.2-webkit2-4.1
 
       - name: Install Python deps (Linux)
         if: runner.os == 'Linux'
