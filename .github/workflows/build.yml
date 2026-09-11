@@ -65,7 +65,9 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           cd dist
-          ditto -c -k --keepParent "Aragoz Lite.app" "../AragozLite-${{ github.ref_name }}-macos-arm64.zip"
+          mkdir -p macpkg
+          cp "Aragoz Lite" macpkg/
+          ditto -c -k macpkg "../AragozLite-${{ github.ref_name }}-macos-arm64.zip"
 
       - name: Package distributable (Windows)
         if: runner.os == 'Windows'
