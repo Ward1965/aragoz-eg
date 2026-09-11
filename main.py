@@ -59,10 +59,9 @@ def _build_welcome_html():
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
   html, body {{ height:100%; overflow:hidden; background:#1e293b; font-family:'Segoe UI',Tahoma,Arial,sans-serif; }}
-  .card {{ position:relative; width:calc(100% - 4px); height:calc(100% - 4px); margin:2px;
+  .card {{ position:relative; width:100%; height:100%; margin:0;
            background:#1e293b; border:1px solid #EE88DF; border-radius:18px; padding:32px 36px 76px;
            text-align:center; color:#e2e8f0;
-           box-shadow:0 24px 64px rgba(0,0,0,0.35);
            animation:welcomePop .28s cubic-bezier(.34,1.56,.64,1); user-select:none; }}
   @keyframes welcomePop {{
     from {{ transform:translateY(12px) scale(.97); opacity:0; }}
@@ -174,7 +173,7 @@ def _round_welcome_window_on_windows(uid):
             gdi32.CreateRoundRectRgn.restype = wt.HRGN
             w = form.ClientSize.Width
             h = form.ClientSize.Height
-            r = 20
+            r = 18
             hrgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, r, r)
             if hrgn:
                 user32.SetWindowRgn(int(form.Handle), int(hrgn), True)
@@ -221,6 +220,7 @@ def main():
         frameless=True,
         easy_drag=True,
         resizable=False,
+        shadow=False,
     )
     api._main_window = main_window
     api._welcome_window = welcome_window
