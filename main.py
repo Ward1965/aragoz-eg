@@ -2,6 +2,7 @@ import atexit
 import os
 import socket
 import sys
+import threading
 
 from backend.logging_setup import setup_logging, get_logger
 
@@ -142,6 +143,47 @@ def _build_welcome_html():
 </html>"""
 
 
+def _round_welcome_window_on_windows(uid):
+    def worker():
+        try:
+            import webview.platforms.winforms as wf
+        except Exception:
+            return
+
+        import time
+
+        deadline = time.time() + 20
+        form = None
+        while time.time() < deadline:
+            try:
+                form = wf.BrowserView.instances.get(uid)
+                if form is not None and form.IsHandleCreated:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.05)
+        if form is None:
+            return
+
+        try:
+            import ctypes
+            from ctypes import wintypes as wt
+
+            gdi32 = ctypes.windll.gdi32
+            user32 = ctypes.windll.user32
+            gdi32.CreateRoundRectRgn.restype = wt.HRGN
+            w = form.ClientSize.Width
+            h = form.ClientSize.Height
+            r = 20
+            hrgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, r, r)
+            if hrgn:
+                user32.SetWindowRgn(int(form.Handle), int(hrgn), True)
+        except Exception as exc:
+            log.debug("Rounding welcome window failed: %s", exc)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def main():
     setup_logging()
 
@@ -192,6 +234,8 @@ def main():
             log.debug("Fallback maximize failed: %s", e)
 
     welcome_window.events.closed += _welcome_closed
+
+    _round_welcome_window_on_windows(welcome_window.uid)
 
     log.info("Application windows created, starting event loop")
     webview.start(debug=False)
