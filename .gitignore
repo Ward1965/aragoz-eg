@@ -1,12 +1,25 @@
-__pycache__/
-*.pyc
-*.pyo
+# بيانات/حالة وقت التشغيل
+configs.db
+configs.db-shm
+configs.db-wal
+good_sources.json
+dead_links.json
+dead_links.json.bak
+startup_err.log
+startup_out.log
+
+# السجلات
+logs/
+
+# مخرجات البناء
 build/
 dist/
-*.spec
-configs.db*
-dead_links.json
-*.log
-.venv/
-venv/
-.DS_Store
+__pycache__/
+*.pyc
+
+# مستودع طرف ثالث مضمّن
+--clash-verge-rev-dev/
+
+# أسرار وبيئة
+.env
+*.token

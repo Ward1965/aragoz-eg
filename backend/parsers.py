@@ -1,7 +1,7 @@
 import base64
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from urllib.parse import urlparse, parse_qs, unquote
 from typing import Dict, List, Optional
 
@@ -23,6 +23,10 @@ PROTOCOL_COLORS = {
     "NaiveProxy": "#a855f7",
     "SSH": "#64748b",
     "OpenVPN": "#eab308",
+    "IKEv2": "#0ea5e9",
+    "L2TP": "#14b8a6",
+    "SoftEther": "#f43f5e",
+    "PPTP": "#f59e0b",
     "Tor": "#78716c",
 }
 
@@ -158,7 +162,7 @@ def _parse_expiry_value(val: str):
             ts = ts / 1000.0
         if 1_000_000_000 < ts < 4_100_000_000:
             try:
-                return datetime.utcfromtimestamp(ts).date().isoformat()
+                return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
             except Exception:
                 pass
         return None
@@ -875,6 +879,183 @@ def parse_http_proxy(line: str) -> Optional[Dict]:
         return None
 
 
+def _valid_gateway_host(host: str) -> bool:
+    if not host:
+        return False
+    host = host.strip("[]")
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}$", host):
+        return True
+    if re.match(r"^[a-zA-Z0-9]([a-zA-Z0-9_-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9_-]*[a-zA-Z0-9])?)+$", host):
+        return True
+    if ":" in host and re.match(r"^[0-9a-fA-F:]+$", host):
+        return True
+    return False
+
+
+_GATEWAY_UPH = re.compile(
+    r"^(?P<user>[^:@\s]+):(?P<pass>[^@\s]+)@(?P<host>[^:@\s]+):(?P<port>\d+)(?:\s+#.*|\s+.*)?$"
+)
+_GATEWAY_HPU = re.compile(
+    r"^(?P<host>[^:@\s]+):(?P<port>\d+)@(?P<user>[^:@\s]+):(?P<pass>[^@\s]+)(?:\s+#.*|\s+.*)?$"
+)
+_GATEWAY_COLON = re.compile(
+    r"^(?P<host>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(?P<port>\d+):(?P<user>[^:]+):(?P<pass>.*?)(?:\s*#.*)?$"
+)
+
+
+def _classify_gateway(line: str, port: int) -> Optional[str]:
+    lower = line.lower()
+    if "softether" in lower:
+        return "SoftEther"
+    if "openvpn" in lower or "ovpn" in lower:
+        return "OpenVPN"
+    if "ikev2" in lower or "ike " in lower or "ikev2/ipsec" in lower:
+        return "IKEv2"
+    if "l2tp" in lower:
+        return "L2TP"
+    if "pptp" in lower:
+        return "PPTP"
+    if "ssh" in lower:
+        return "SSH"
+    if port == 22:
+        return "SSH"
+    if port in (500, 4500):
+        return "IKEv2"
+    if port == 1701:
+        return "L2TP"
+    if port == 1723:
+        return "PPTP"
+    if port == 1194:
+        return "OpenVPN"
+    return None
+
+
+def _build_gateway(proto: str, host: str, port: int, user: str, password: str, remark: str, raw: str) -> Optional[Dict]:
+    if not _valid_gateway_host(host):
+        return None
+    if not remark:
+        remark = f"{proto} {user}@{host}:{port}" if user else f"{proto} {host}:{port}"
+    return {
+        "protocol": proto,
+        "protocol_type": proto,
+        "name": remark,
+        "server": host,
+        "port": port,
+        "username": user,
+        "password": password,
+        "raw": raw,
+    }
+
+
+def parse_gateway_account(line: str) -> Optional[Dict]:
+    """Detect account-style VPN/SSH subscription lines:
+    user:pass@host:port | host:port@user:pass | host:port:user:pass"""
+    try:
+        cleaned = line.strip()
+        proto = _classify_gateway(cleaned, 0)
+        msg = re.match(_GATEWAY_COLON, cleaned)
+        if msg:
+            p = int(msg.group("port"))
+            proto = proto or _classify_gateway(cleaned, p)
+            if not proto:
+                return None
+            return _build_gateway(
+                proto,
+                msg.group("host"), p,
+                msg.group("user"), msg.group("pass"),
+                "", cleaned,
+            )
+        m = re.match(_GATEWAY_UPH, cleaned)
+        if m:
+            p = int(m.group("port"))
+            proto = proto or ("SSH" if p == 22 else _classify_gateway(cleaned, p))
+            if not proto:
+                return None
+            return _build_gateway(proto, m.group("host"), p, m.group("user"), m.group("pass"), "", cleaned)
+        m = re.match(_GATEWAY_HPU, cleaned)
+        if m:
+            p = int(m.group("port"))
+            proto = proto or ("PPTP" if p == 1723 else ("L2TP" if p == 1701 else None))
+            if not proto:
+                return None
+            return _build_gateway(proto, m.group("host"), p, m.group("user"), m.group("pass"), "", cleaned)
+        return None
+    except Exception:
+        return None
+
+
+_URL_RE_STR_START = re.compile(r"^https?://", re.IGNORECASE)
+
+
+def parse_openvpn(line: str) -> Optional[Dict]:
+    try:
+        if _URL_RE_STR_START.search(line):
+            return None
+        m = re.search(r"(?i)\bremote\s+(\S+)(?:\s+(\d{1,5}))?", line)
+        if not m:
+            return None
+        host = m.group(1)
+        port = int(m.group(2) or "1194")
+        remark = ""
+        remark_match = re.search(r"#(.+)$", line)
+        if remark_match:
+            remark = remark_match.group(1).strip()
+        return _build_gateway("OpenVPN", host, port, "", "", remark, line.strip())
+    except Exception:
+        return None
+
+
+def parse_ssh(line: str) -> Optional[Dict]:
+    return parse_gateway_uri(line, "SSH", default_port=22)
+
+
+def parse_ikev2(line: str) -> Optional[Dict]:
+    return parse_gateway_uri(line, "IKEv2", default_port=500)
+
+
+def parse_l2tp(line: str) -> Optional[Dict]:
+    return parse_gateway_uri(line, "L2TP", default_port=1701)
+
+
+def parse_pptp(line: str) -> Optional[Dict]:
+    return parse_gateway_uri(line, "PPTP", default_port=1723)
+
+
+def parse_softether(line: str) -> Optional[Dict]:
+    return parse_gateway_uri(line, "SoftEther", default_port=443)
+
+
+_GATEWAY_URI_SCHEMES = {
+    "ssh": "SSH", "ikev2": "IKEv2", "l2tp": "L2TP", "pptp": "PPTP", "softether": "SoftEther",
+}
+
+
+def parse_gateway_uri(line: str, proto: str, default_port: int) -> Optional[Dict]:
+    try:
+        cleaned = line.strip()
+        prefix = [k for k, v in _GATEWAY_URI_SCHEMES.items() if v == proto]
+        if not prefix or not cleaned.lower().startswith(prefix[0] + "://"):
+            return None
+        cleaned = cleaned.split("://", 1)[1]
+
+        remark = ""
+        remark_match = re.search(r"#(.+)$", cleaned)
+        if remark_match:
+            remark = unquote(remark_match.group(1))
+            cleaned = cleaned[: remark_match.start()]
+
+        m = re.match(r"(?:(?P<user>[^@/:#]+)(?::(?P<pass>[^@/:#]*))?@)?(?P<host>[^@/:]+)(?::(?P<port>\d+))?", cleaned)
+        if not m or not m.group("host"):
+            return None
+        host = m.group("host")
+        port = int(m.group("port") or default_port)
+        user = m.group("user") or ""
+        password = m.group("pass") or ""
+        return _build_gateway(proto, host, port, user, password, remark, line.strip())
+    except Exception:
+        return None
+
+
 PARSERS = {
     "vless://": parse_vless,
     "vmess://": parse_vmess,
@@ -896,6 +1077,11 @@ PARSERS = {
     "naive+quic://": parse_naive,
     "http://": parse_http_proxy,
     "https://": parse_http_proxy,
+    "ssh://": parse_ssh,
+    "ikev2://": parse_ikev2,
+    "l2tp://": parse_l2tp,
+    "pptp://": parse_pptp,
+    "softether://": parse_softether,
 }
 
 
@@ -912,6 +1098,13 @@ def parse_line(line: str) -> Optional[Dict]:
     for prefix, parser in PARSERS.items():
         if line.lower().startswith(prefix):
             return parser(line)
+
+    result = parse_openvpn(line)
+    if result:
+        return result
+    result = parse_gateway_account(line)
+    if result:
+        return result
 
     return None
 
@@ -932,6 +1125,11 @@ CLASH_TYPE_MAP = {
     "wireguard": "WireGuard",
     "naive": "NaiveProxy",
     "ssh": "SSH",
+    "ikev2": "IKEv2",
+    "l2tp": "L2TP",
+    "pptp": "PPTP",
+    "softether": "SoftEther",
+    "openvpn": "OpenVPN",
 }
 
 

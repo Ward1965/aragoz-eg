@@ -6,105 +6,215 @@
     let totalConfigs = 0;
     let activeFilters = new Set();
     let activeCountries = new Set();
+    let activePingFilters = new Set();
+    let pingStats = null;
+    let displayConfigs = [];
+    let pendingFilterRender = null;
+    let filterMsgShown = false;
     let currentDetailRaw = "";
     let sortState = { key: "", dir: 1 };
     let progressTimer = null;
     let currentQrText = "";
     let loadJob = 0;
+    let searchGen = 0;
     let loadedOffset = 0;
+    let currentPage = 0;
     let loadingMore = false;
     let scrollTimer = null;
     let lastKnownCount = null;
+    let livePingRefresh = false;
     let liveRefreshTimer = null;
     let liveRefreshJob = 0;
-    const PAGE_SIZE = 4000;
-    const MAX_VISIBLE = 60000;
-    let ROW_H = 0;
-    let virt = { first: 0, last: 0 };
-    let virtPending = null;
-    const VIT_BUF = 400;
+    let progressStartTime = 0;
+    const latencyResults = new Map();
+    let pingAllRunning = false;
+    let pingAllCancelled = false;
+    let currentTask = null;
+    let pendingTaskWork = null;
+    let searchStateActive = false;
+    let busyOperation = "";
+    function showBusy(msg) {
+        busyOperation = msg;
+        const ov = document.getElementById("busyOverlay");
+        const tx = document.getElementById("busyText");
+        if (ov) ov.style.display = "flex";
+        if (tx) tx.textContent = msg;
+    }
+    function hideBusy() {
+        busyOperation = "";
+        const ov = document.getElementById("busyOverlay");
+        if (ov) ov.style.display = "none";
+    }
+    let searchStartTime = 0;
+    let searchTimerId = null;
+    let PAGE_SIZE = 20;
+
+    function recalcPageSize() {
+        const wrapper = document.querySelector(".table-wrapper");
+        const visH = wrapper ? wrapper.clientHeight : window.innerHeight;
+        let rowH = 0;
+        try { rowH = document.querySelector("#configBody tr").offsetHeight; } catch (e) {}
+        if (!rowH || rowH < 10) rowH = 41;
+        PAGE_SIZE = Math.max(10, Math.floor(visH / rowH));
+    }
 
     function wrapScrollEl() {
         return document.querySelector(".table-wrapper") || document.documentElement;
     }
 
-    function measureRowHeight() {
-        const firstRow = document.querySelector("#configBody tr:not(.vit-spacer):not(.more-row)");
-        if (!firstRow) return;
-        const h = firstRow.offsetHeight;
-        if (h > 1 && (ROW_H === 0 || Math.abs(h - ROW_H) > 1)) ROW_H = h;
-        if (ROW_H === 0) ROW_H = 38;
+
+
+
+    function pageCount() {
+        return Math.max(1, Math.ceil(totalConfigs / PAGE_SIZE));
     }
 
-    function computeWindow() {
-        const wrap = wrapScrollEl();
-        const st = wrap.scrollTop || 0;
-        const vh = wrap.clientHeight || 600;
-        const total = allConfigs.length;
-        if (total === 0) return { first: 0, last: 0 };
-        let first = Math.max(0, Math.floor((st - VIT_BUF) / ROW_H));
-        let last = Math.min(total, Math.ceil((st + vh + VIT_BUF) / ROW_H));
-        return { first, last };
+    function updateConfigCounter() {
+        const el = $("#configCount");
+        if (!el) return;
+        if (totalConfigs === 0) {
+            el.textContent = "0 configs";
+            return;
+        }
+        const overlay = $("#progressOverlay");
+        if (overlay && overlay.style.display === "flex") {
+            el.textContent = totalConfigs.toLocaleString() + " configs";
+            return;
+        }
+        const start = Math.min(totalConfigs, currentPage * PAGE_SIZE + 1);
+        const end = Math.min(totalConfigs, (currentPage + 1) * PAGE_SIZE);
+        el.textContent = start.toLocaleString() + "-" + end.toLocaleString() + " of " + totalConfigs.toLocaleString() + " configs";
     }
 
-    function requestVirtRender() {
-        if (virtPending) return;
-        virtPending = requestAnimationFrame(() => {
-            virtPending = null;
-            renderWindow(false);
+    function updatePagination() {
+        const first = $("#firstPageBtn");
+        const prev = $("#prevPageBtn");
+        const next = $("#nextPageBtn");
+        const last = $("#lastPageBtn");
+        const ind = $("#pageIndicator");
+        if (!prev || !next || !ind) return;
+        const pc = pageCount();
+        currentPage = Math.max(0, Math.min(currentPage, pc - 1));
+        if (first) first.disabled = currentPage <= 0;
+        prev.disabled = currentPage <= 0;
+        if (last) last.disabled = currentPage >= pc - 1;
+        next.disabled = currentPage >= pc - 1;
+        ind.textContent = "Page " + (currentPage + 1) + " / " + pc;
+    }
+
+    function goToPage(page) {
+        hideBusy();
+        const pc = pageCount();
+        currentPage = Math.max(0, Math.min(page, pc - 1));
+        loadConfigs(true);
+    }
+
+    function goToFirstRow() {
+        goToPage(0);
+    }
+
+    function goToLastRow() {
+        const pc = pageCount();
+        currentPage = Math.max(0, pc - 1);
+        loadConfigs(true).then(() => {
+            requestAnimationFrame(() => {
+                const el = wrapScrollEl();
+                el.scrollTop = el.scrollHeight;
+            });
         });
     }
 
     function renderWindow(force = true) {
         const tbody = document.querySelector("#configBody");
         if (!tbody) return;
-        measureRowHeight();
-        const w = computeWindow();
-        if (!force && w.first === virt.first && w.last === virt.last) return;
-        virt = w;
-        const topH = w.first * ROW_H;
-        const bottomH = (allConfigs.length - w.last) * ROW_H;
-        const spacerTop = topH > 0 ? `<tr class="vit-spacer"><td colspan="8" style="height:${topH}px"></td></tr>` : "";
-        const spacerBottom = bottomH > 0 ? `<tr class="vit-spacer"><td colspan="8" style="height:${bottomH}px"></td></tr>` : "";
-        const rowsHtml = buildRowsHtml(allConfigs.slice(w.first, w.last), w.first);
-        let moreHtml = "";
-        if (allConfigs.length < totalConfigs) {
-            moreHtml = `<tr class="more-row"><td colspan="8">${
-                allConfigs.length >= MAX_VISIBLE
-                    ? `Showing first ${allConfigs.length.toLocaleString()} rows — max reached`
-                    : `<button class="btn btn-secondary btn-sm" id="loadMoreBtn">Load more (${(totalConfigs - allConfigs.length).toLocaleString()} remaining)</button>`
-            }</td></tr>`;
-        }
-        tbody.innerHTML = spacerTop + rowsHtml + spacerBottom + moreHtml;
+        tbody.innerHTML = buildRowsHtml(displayConfigs || [], currentPage * PAGE_SIZE);
     }
 
     const api = () => window.pywebview.api;
 
     function waitForApi(cb, retries = 50) {
         if (window.pywebview && window.pywebview.api) {
+            recalcPageSize();
             cb();
         } else if (retries > 0) {
             setTimeout(() => waitForApi(cb, retries - 1), 100);
         }
     }
 
+    const TOAST_ICONS = {
+        success: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"/><path d="m9 11 3 3L22 4"/></svg>',
+        error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>',
+        info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>',
+        warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>',
+    };
+
+    let _toastAudio = null;
+    function playToastSound() {
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return;
+            if (!_toastAudio) _toastAudio = new AC();
+            if (_toastAudio.state === "suspended") _toastAudio.resume();
+            const freq = 880;
+            const osc = _toastAudio.createOscillator();
+            const gain = _toastAudio.createGain();
+            osc.type = "sine";
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.001, _toastAudio.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.25, _toastAudio.currentTime + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, _toastAudio.currentTime + 0.35);
+            osc.connect(gain);
+            gain.connect(_toastAudio.destination);
+            osc.start(_toastAudio.currentTime);
+            osc.stop(_toastAudio.currentTime + 0.4);
+        } catch (e) {}
+    }
+
+    let _toastTimer = null;
     function toast(msg, type = "info") {
-        const el = document.createElement("div");
+        playToastSound();
+        const container = $("#toast-container");
+        let el = container.firstElementChild;
+        container.querySelectorAll(".toast").forEach((t) => t.remove());
+        el = document.createElement("div");
         el.className = "toast toast-" + type;
-        el.textContent = msg;
-        $("#toast-container").appendChild(el);
-        setTimeout(() => el.remove(), 3500);
+        el.innerHTML = `<span class="toast-icon">${TOAST_ICONS[type] || TOAST_ICONS.info}</span><span class="toast-msg">${esc(msg)}</span>`;
+        if (type === "error") {
+            el.style.cursor = "pointer";
+            el.title = "Click to copy error";
+            el.addEventListener("click", () => {
+                navigator.clipboard.writeText(msg).then(() => {
+                    el.querySelector(".toast-msg").textContent = "Copied!";
+                    _toastTimer && clearTimeout(_toastTimer);
+                    _toastTimer = setTimeout(() => el.remove(), 700);
+                });
+            });
+        }
+        container.appendChild(el);
+        container.style.display = "flex";
+        if (_toastTimer) clearTimeout(_toastTimer);
+        _toastTimer = setTimeout(() => {
+            el.style.transition = "opacity 0.3s, transform 0.3s";
+            el.style.opacity = "0";
+            el.style.transform = "scale(0.94)";
+            setTimeout(() => {
+                el.remove();
+                if (!container.hasChildNodes()) container.style.display = "none";
+            }, 300);
+        }, 3500);
     }
 
     async function loadConfigs(reset = true, silent = false, opts = {}) {
         const job = ++loadJob;
         if (reset) {
             allConfigs = [];
-            loadedOffset = 0;
+            loadedOffset = currentPage * PAGE_SIZE;
+            searchGen++;
             if (!opts.keepScroll) wrapScrollEl().scrollTop = 0;
         }
         try {
             const query = ($("#searchInput").value || "").trim();
+            const ping = activePingFilters.size ? [...activePingFilters].join(",") : "";
             const res = JSON.parse(
                 await api().get_configs(
                     query,
@@ -112,12 +222,20 @@
                     sortState.key,
                     sortState.dir,
                     loadedOffset,
-                    PAGE_SIZE
+                    PAGE_SIZE,
+                    ping
                 )
             );
             if (job !== loadJob) return allConfigs.length;
-            allConfigs = allConfigs.concat(res.configs || []);
-            totalConfigs = res.total || 0;
+            const rows = res.configs || [];
+            const total = res.total || 0;
+            if (rows.length === 0 && total > 0 && currentPage * PAGE_SIZE >= total && !opts._retried) {
+                currentPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
+                allConfigs = [];
+                return loadConfigs(reset, silent, Object.assign({}, opts, { _retried: true }));
+            }
+            allConfigs = allConfigs.concat(rows);
+            totalConfigs = total;
             loadedOffset = allConfigs.length;
             if (!silent) renderTable();
             return allConfigs.length;
@@ -127,31 +245,9 @@
         }
     }
 
-    async function ensureLoaded(maxRows) {
-        const target = Math.min(totalConfigs, maxRows);
-        let guard = 0;
-        while (allConfigs.length < target && guard++ < 50) {
-            const silent = allConfigs.length + PAGE_SIZE < target;
-            await loadConfigs(false, silent);
-        }
-        renderTable();
-    }
-
-    function maybeLoadMore() {
-        if (loadingMore) return;
-        if (allConfigs.length >= totalConfigs) return;
-        if (allConfigs.length >= MAX_VISIBLE) return;
-        const wrap = wrapScrollEl();
-        if (wrap.scrollTop + wrap.clientHeight >= allConfigs.length * ROW_H - 900) {
-            loadingMore = true;
-            loadConfigs(false).finally(() => {
-                loadingMore = false;
-            });
-        }
-    }
 
     function formatExpiry(e) {
-        if (!e) return { text: "—", cls: "", title: "No expiry info" };
+        if (!e) return { text: "?", cls: "", title: "No expiry info" };
         const d = new Date(e.slice(0, 10) + "T00:00:00");
         if (isNaN(d.getTime())) return { text: "—", cls: "", title: e };
         const now = new Date();
@@ -163,9 +259,15 @@
         return { text: days + " days", cls: "exp-ok", title: e };
     }
 
+
     function buildRowsHtml(configs, baseIndex = 0) {
         return configs
             .map((c, i) => {
+                const key = (c.server || "") + ":" + (c.port || 0);
+                const saved = latencyResults.get(key);
+                const badgeHtml = saved
+                    ? `<span class="latency-badge ${latencyClass(saved.ms)}" data-server="${escAttr(c.server)}" data-port="${c.port}" data-id="${c.id}">${latencyLabel(saved.ms, saved.error)}</span>`
+                    : `<span class="latency-badge" data-server="${escAttr(c.server)}" data-port="${c.port}" data-id="${c.id}"></span>`;
                 return `
                 <tr data-id="${c.id}">
                     <td class="row-number">${baseIndex + i + 1}</td>
@@ -173,9 +275,11 @@
                     <td><span class="protocol-badge" style="background:${c.color}">${esc(c.protocol)}</span></td>
                     <td title="${esc(c.server)}">${esc(c.server)}</td>
                     <td>${c.port}</td>
-                    <td title="${esc(c.country || '')}">${flagMarkup(c.country)}${esc(c.country || '—')}</td>
+                    <td title="${esc(c.country || '')}">${flagMarkup(c.country)}${esc(c.country || '?')}</td>
+                    <td>${badgeHtml}</td>
                     <td>
                         <div class="actions-cell">
+                            <button class="btn btn-sm btn-secondary ping-btn" data-id="${c.id}" title="Test latency">Ping</button>
                             <button class="btn btn-sm btn-secondary copy-btn" data-id="${c.id}" title="Copy">Copy</button>
                             <button class="btn btn-sm btn-secondary qr-btn" data-id="${c.id}" title="Show QR">QR</button>
                             <button class="btn btn-sm btn-secondary detail-btn" data-id="${c.id}" title="Details">Details</button>
@@ -187,37 +291,187 @@
             .join("");
     }
 
+    function renderEmptyGrid() {
+        const tbody = $("#configBody");
+        const cols = document.querySelectorAll("#configTable thead th").length || 1;
+        const rows = Math.max(1, Math.min(PAGE_SIZE || 20, 30));
+        const cell = "<td>&nbsp;</td>";
+        tbody.innerHTML = `<tr>${cell.repeat(cols)}</tr>`.repeat(rows);
+    }
+
     function renderTable() {
         const tbody = $("#configBody");
         const table = $("#configTable");
         const emptyState = $("#emptyState");
+        updatePingAllBtnState();
+
+        if (pendingFilterRender === null) {
+            displayConfigs = allConfigs;
+        } else {
+            displayConfigs = pendingFilterRender;
+        }
+        pendingFilterRender = null;
 
         if (totalConfigs === 0) {
             $("#configCount").textContent = "0 configs";
-            table.style.display = "none";
-            emptyState.style.display = "block";
-            tbody.innerHTML = "";
+            updatePagination();
+            emptyState.style.display = "none";
+            table.style.display = "table";
+            renderEmptyGrid();
+            document.getElementById("toolbarStats")?.remove();
             return;
         }
         emptyState.style.display = "none";
         table.style.display = "table";
+        if (searchStateActive) {
+            searchStateActive = false;
+            const def = $("#emptyDefault");
+            const searching = $("#emptySearching");
+            if (def) def.style.display = "block";
+            if (searching) searching.style.display = "none";
+        }
 
-        $("#configCount").textContent =
-            allConfigs.length >= totalConfigs
-                ? totalConfigs.toLocaleString() + " configs"
-                : allConfigs.length.toLocaleString() + " of " + totalConfigs.toLocaleString() + " configs";
+        updateConfigCounter();
+        updatePagination();
 
-        if (allConfigs.length === 0 && totalConfigs > 0) {
+        if (displayConfigs.length === 0 && totalConfigs > 0) {
+            if (busyOperation) {
+                showBusy(busyOperation);
+                return;
+            }
             tbody.innerHTML = `
                 <tr><td colspan="8">
                     <div class="empty-state">
                         <h3>No matching configs</h3>
-                        <p>Try clearing your search or filters</p>
+                        <p>Try clearing your search, ping or filters</p>
                     </div>
                 </td></tr>`;
             return;
         }
         renderWindow(true);
+    }
+
+    function updatePingAllBtnState() {
+        const btn = $("#pingAllBtn");
+        if (!btn) return;
+        const empty = totalConfigs === 0 || displayConfigs.length === 0;
+        if (empty || pingAllRunning) {
+            btn.disabled = true;
+        } else {
+            btn.disabled = false;
+            btn.innerHTML = "Ping All";
+        }
+    }
+
+    let filterJobSeq = 0;
+
+    function latencyOf(c) {
+        const r = latencyResults.get((c.server || "") + ":" + (c.port || 0));
+        return r ? r.ms : Number.NaN;
+    }
+    function pingCategoryOf(c) {
+        const ms = latencyOf(c);
+        if (Number.isNaN(ms)) return "untested";
+        if (ms < 0) return "dead";
+        if (ms < 150) return "fast";
+        if (ms < 300) return "mid";
+        return "slow";
+    }
+
+    function fastLocalFilter() {
+        const q = ($("#searchInput").value || "").trim().toLowerCase();
+        let list = allConfigs;
+        if (activeFilters.size) {
+            list = list.filter((c) => activeFilters.has(c.protocol_type || c.protocol));
+        }
+        if (activeCountries.size) {
+            list = list.filter((c) => activeCountries.has(c.country || ""));
+        }
+        if (activePingFilters.size) {
+            list = list.filter((c) => activePingFilters.has(pingCategoryOf(c)));
+        }
+        if (q) {
+            list = list.filter((c) => {
+                const hay = ((c.name || "") + " " + (c.server || "") + " " + (c.protocol || "")).toLowerCase();
+                return hay.includes(q);
+            });
+        }
+        return list;
+    }
+
+    function refreshFilteredTable(itemEl) {
+        const myJob = ++filterJobSeq;
+        const flashKey = itemEl ? itemEl.dataset.ping || itemEl.dataset.type || itemEl.dataset.country || null : null;
+        syncFilterHighlights();
+        flashFilterItem(itemEl, flashKey);
+        showBusy("Filtering configs...");
+        const local = fastLocalFilter();
+        pendingFilterRender = local;
+        renderTable();
+        currentPage = 0;
+        loadConfigs(true)
+            .then(() => {
+                if (myJob !== filterJobSeq) { hideBusy(); return; }
+                hideBusy();
+                pendingFilterRender = allConfigs;
+                renderTable();
+                try { renderFilters().catch(() => {}); } catch (e) {}
+                const el = findFilterItem(flashKey);
+                syncFilterHighlights();
+                flashFilterItem(el, flashKey);
+                setTimeout(() => {
+                    if (myJob === filterJobSeq) unflashFilterItem(findFilterItem(flashKey));
+                }, 350);
+            })
+            .catch(() => {
+                if (myJob !== filterJobSeq) { hideBusy(); return; }
+                hideBusy();
+                unflashFilterItem(findFilterItem(flashKey));
+            });
+    }
+
+    function syncFilterHighlights() {
+        document.querySelectorAll("#protocolFilters .filter-item").forEach((el) => {
+            const k = el.dataset.type;
+            el.classList.toggle("active", k === "__all__" ? activeFilters.size === 0 : activeFilters.has(k));
+        });
+        document.querySelectorAll("#pingFilters .filter-item").forEach((el) => {
+            const k = el.dataset.ping;
+            el.classList.toggle("active", k === "__all__" ? activePingFilters.size === 0 : activePingFilters.has(k));
+        });
+        document.querySelectorAll("#countryFilters .filter-item").forEach((el) => {
+            const k = el.dataset.country;
+            el.classList.toggle("active", k === "__all__" ? activeCountries.size === 0 : activeCountries.has(k));
+        });
+    }
+
+    function flashFilterItem(itemEl, key) {
+        if (!itemEl) return;
+        itemEl.classList.add("filtering");
+        const cnt = itemEl.querySelector(".filter-count");
+        if (cnt && !itemEl.dataset.flashing) {
+            itemEl.dataset.flashing = "1";
+            cnt.dataset.prev = cnt.textContent;
+        }
+    }
+
+    function unflashFilterItem(itemEl) {
+        if (!itemEl) return;
+        itemEl.classList.remove("filtering");
+        if (itemEl.dataset.flashing) {
+            const cnt = itemEl.querySelector(".filter-count");
+            if (cnt) cnt.textContent = cnt.dataset.prev || cnt.textContent;
+            delete itemEl.dataset.flashing;
+        }
+    }
+
+    function findFilterItem(key) {
+        if (!key) return null;
+        return document.querySelector(
+            `#pingFilters .filter-item[data-ping="${key}"], ` +
+            `#protocolFilters .filter-item[data-type="${key}"], ` +
+            `#countryFilters .filter-item[data-country="${escAttr(key)}"]`
+        );
     }
 
     function copyConfig(id) {
@@ -238,11 +492,297 @@
             .catch(() => toast("Copy failed", "error"));
     }
 
+    function latencyClass(ms) {
+        if (ms < 0) return "lat-bad";
+        if (ms < 150) return "lat-good";
+        if (ms < 300) return "lat-mid";
+        return "lat-bad";
+    }
+
+    function latencyLabel(ms, err) {
+        if (ms < 0) return err ? "?" : "?";
+        return ms + "ms";
+    }
+
+    async function handlePing(btn) {
+        const badge = btn.closest("tr").querySelector(".latency-badge");
+        const server = badge.dataset.server || "";
+        const port = badge.dataset.port || 0;
+        btn.disabled = true;
+        btn.textContent = "?";
+        try {
+            const res = JSON.parse(await api().test_latency(server, port));
+            saveLatency(server, port, res);
+        } catch (e) {
+            saveLatency(server, port, { ok: false, ms: -1, error: e.message });
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "Ping";
+        }
+    }
+
+    function applyLatencyBadge(badge, res) {
+        if (!badge) return;
+        const ms = typeof res.ms === "number" ? res.ms : -1;
+        badge.className = "latency-badge " + latencyClass(ms);
+        badge.textContent = latencyLabel(ms, res.error);
+        badge.title = res.error || (ms >= 0 ? `Latency: ${ms}ms` : "Unreachable");
+    }
+
+    function saveLatency(server, port, res) {
+        const key = (server || "") + ":" + (port || 0);
+        latencyResults.set(key, res);
+        const sel = `.latency-badge[data-server="${CSS.escape(server || "")}"][data-port="${port || 0}"]`;
+        document.querySelectorAll(sel).forEach((b) => applyLatencyBadge(b, res));
+        schedulePingFilterRefresh();
+    }
+
+    let pingFilterRefreshTimer = null;
+    function schedulePingFilterRefresh() {
+        if (pingFilterRefreshTimer) return;
+        pingFilterRefreshTimer = setTimeout(() => {
+            pingFilterRefreshTimer = null;
+            renderPingFilters();
+        }, 400);
+    }
+
+    const TASK_LABELS = {
+        fetch: "Fetching sources",
+        scan: "Scanning the web",
+        telegram: "Fetching from Telegram",
+        ping: "Pinging all configs",
+        import_file: "Importing file",
+        raw_import: "Importing raw text",
+    };
+
+    function openConfirmModal(task) {
+        $("#confirmTitle").textContent = TASK_LABELS[task] || task;
+        $("#confirmMsg").textContent =
+            "There is a task already running: " + (TASK_LABELS[currentTask] || currentTask) +
+            ".\nStop it and start " + (TASK_LABELS[task] || task) + "?";
+        $("#confirmModal").style.display = "flex";
+    }
+
+    function showConfirm({ title, message, icon, yesLabel, noLabel }) {
+        return new Promise((resolve) => {
+            if (icon) $("#confirmIcon").textContent = icon;
+            $("#confirmTitle").textContent = title || "Confirm";
+            $("#confirmMsg").textContent = message || "";
+            const yesBtn = $("#confirmYesBtn");
+            const noBtn = $("#confirmNoBtn");
+            yesBtn.textContent = yesLabel || "Yes";
+            noBtn.textContent = noLabel || "No";
+            $("#confirmModal").style.display = "flex";
+            const cleanup = (result) => {
+                $("#confirmModal").removeEventListener("mousedown", outsideHandler, true);
+                yesBtn.onclick = null;
+                noBtn.onclick = null;
+                $("#confirmModal").style.display = "none";
+                $("#confirmIcon").textContent = "✓";
+                resolve(result);
+            };
+            const outsideHandler = (e) => {
+                if (e.target === $("#confirmModal")) cleanup(false);
+            };
+            $("#confirmModal").addEventListener("mousedown", outsideHandler, true);
+            yesBtn.onclick = () => cleanup(true);
+            noBtn.onclick = () => cleanup(false);
+        });
+    }
+
+    async function stopCurrentTask() {
+        try { await api().cancel(); } catch (e) {}
+        if (pingAllRunning) {
+            stopPingPoller();
+            finishPingAll(null, true);
+        }
+        stopProgressPolling();
+        hideProgress();
+        if (pingAllRunning || currentTask === "ping") {
+            resetPingUiState();
+        } else {
+            clearPingResults();
+        }
+        await waitForBgIdle();
+        const bg = await api().get_bg_result().catch(() => "{}");
+        try {
+            const r = JSON.parse(bg);
+            if (r && r.error) toast("Task stopped", "info");
+        } catch (e) {}
+        currentTask = null;
+    }
+
+    async function waitForBgIdle(timeoutMs = 2500) {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            try {
+                const p = JSON.parse(await api().get_progress());
+                if (!p || p.phase === "idle" || !String(p.phase || "").startsWith("ping")) {
+                    return;
+                }
+            } catch (e) {}
+            await new Promise((r) => setTimeout(r, 100));
+        }
+    }
+
+    function resetPingUiState() {
+        latencyResults.clear();
+        activePingFilters.clear();
+        pingStats = null;
+        pingAppliedSince = 0;
+        pingLastRender = 0;
+        document.querySelectorAll(".latency-badge").forEach((b) => {
+            b.textContent = "";
+            b.removeAttribute("class");
+            b.className = "latency-badge";
+        });
+        const ptr = $("#pingFilters");
+        if (ptr) ptr.innerHTML = "";
+        renderTable();
+        loadPingResults();
+    }
+
+    function clearPingResults() {
+        latencyResults.clear();
+        activePingFilters.clear();
+        pingStats = null;
+        pingAppliedSince = 0;
+        pingLastRender = 0;
+        document.querySelectorAll(".latency-badge").forEach((b) => {
+            b.textContent = "";
+            b.removeAttribute("class");
+            b.className = "latency-badge";
+        });
+        const ptr = $("#pingFilters");
+        if (ptr) ptr.innerHTML = "";
+        renderTable();
+        renderPingFilters();
+    }
+
+    async function requestTask(task, doWork) {
+        if (currentTask) {
+            pendingTaskWork = () => { currentTask = task; doWork(); };
+            openConfirmModal(task);
+            return;
+        }
+        currentTask = task;
+        doWork();
+    }
+
+    async function handlePingAll() {
+        const btn = $("#pingAllBtn");
+        if (pingAllRunning) {
+            showProgress("⚡", "Pinging all configs", "Pinging...");
+            return;
+        }
+        requestTask("ping", () => handlePingAllStart());
+    }
+
+    async function handlePingAllStart() {
+        const btn = $("#pingAllBtn");
+        pingAllRunning = true;
+        pingAllCancelled = false;
+        pingAppliedSince = 0;
+        pingLastRender = 0;
+        showProgress("⚡", "Pinging all configs", "Preparing...");
+        try {
+            await api().start_bg("ping_all", "");
+        } catch (e) {
+            pingAllRunning = false;
+            updatePingAllBtnState();
+            hideProgress();
+            toast("Failed to start ping: " + e.message, "error");
+            return;
+        }
+        renderPingFilters();
+        document.querySelectorAll(".latency-badge:not(:empty)").forEach((b) => {
+            if (!latencyResults.has(b.dataset.server + ":" + b.dataset.port)) b.textContent = "?";
+        });
+        startPingPoller(btn);
+    }
+
+    let pingPollTimer = null;
+    let pingAppliedSince = 0;
+    let pingLastRender = 0;
+    let pingStartTime = 0;
+    function fmtElapsed(sec) {
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return m > 0 ? `${m}m ${s}s` : `${s}s`;
+    }
+    function startPingPoller(btn) {
+        pingStartTime = Date.now();
+        stopProgressPolling();
+        const poll = async () => {
+            if (pingAllCancelled) { stopPingPoller(); return; }
+            try {
+                const prog = JSON.parse(await api().get_ping_progress());
+                const done = prog.done || 0;
+                const total = prog.total || 0;
+                const elapsedSecs = (Date.now() - pingStartTime) / 1000;
+                const pText = $("#progressText");
+                const pBar = $("#progressBar");
+                const pCount = $("#progressCount");
+                const pTime = $("#progressTime");
+                if (pText) pText.textContent = total > 0 ? `Testing ${done} of ${total} configs...` : "Pinging...";
+                if (pBar) pBar.style.width = total > 0 ? Math.round((done / total) * 100) + "%" : "0%";
+                if (pCount) pCount.textContent = total > 0 ? `${done}/${total} tested` : "0 configs";
+                if (pTime) pTime.textContent = "⏱ " + fmtElapsed(elapsedSecs);
+                try {
+                    const batch = JSON.parse(await api().get_ping_batch(pingAppliedSince));
+                    if (batch.batch && batch.batch.length) {
+                        batch.batch.forEach((item) => {
+                            latencyResults.set(item.key, { ms: item.ms, ok: item.ok, error: item.error });
+                        });
+                        pingAppliedSince = batch.since;
+                    }
+                } catch (e) {}
+                        if (now - pingLastRender > 500) {
+                    pingLastRender = now;
+                    renderTable();
+                    schedulePingFilterRefresh();
+                }
+                if (done >= total && total > 0) {
+                    renderTable();
+                    finishPingAll(btn, false);
+                    return;
+                }
+                const progress = JSON.parse(await api().get_progress());
+                if ((progress.phase === "idle" || progress.phase === "ping_done") && total > 0) {
+                    renderTable();
+                    finishPingAll(btn, false);
+                    return;
+                }
+            } catch (e) {}
+            if (!pingAllCancelled) pingPollTimer = setTimeout(poll, 350);
+        };
+        pingPollTimer = setTimeout(poll, 150);
+    }
+
+    function stopPingPoller() {
+        if (pingPollTimer) { clearTimeout(pingPollTimer); pingPollTimer = null; }
+    }
+
+    function finishPingAll(btn, stopped) {
+        stopPingPoller();
+        pingAllRunning = false;
+        pingAllCancelled = false;
+        if (currentTask === "ping") currentTask = null;
+        renderTable();
+        updatePingAllBtnState();
+        renderPingFilters();
+        hideProgress();
+        playFinishChime();
+    }
+
     async function renderFilters() {
         const container = $("#protocolFilters");
         let counts = [];
+        let allTotal = totalConfigs;
         try {
-            counts = JSON.parse(await api().get_protocol_counts());
+            const parsed = JSON.parse(await api().get_protocol_counts());
+            counts = parsed.items || [];
+            if (typeof parsed.total === "number") allTotal = parsed.total;
         } catch (e) {
             return;
         }
@@ -254,7 +794,7 @@
             container.innerHTML =
                 `<div class="filter-item${allActive}" data-type="__all__">
                     <span><span class="filter-dot" style="background:#8b5cf6"></span>All Protocols</span>
-                    <span class="filter-count">${totalConfigs}</span>
+                    <span class="filter-count">${allTotal.toLocaleString()}</span>
                 </div>` +
                 counts
                     .map((t) => {
@@ -270,8 +810,11 @@
 
         const countryBox = $("#countryFilters");
         let countries = [];
+        let countryTotal = totalConfigs;
         try {
-            countries = JSON.parse(await api().get_country_counts());
+            const parsed = JSON.parse(await api().get_country_counts());
+            countries = parsed.items || [];
+            if (typeof parsed.total === "number") countryTotal = parsed.total;
         } catch (e) {
             return;
         }
@@ -283,7 +826,7 @@
         countryBox.innerHTML =
             `<div class="filter-item${allCountryActive}" data-country="__all__">
                 <span><span class="filter-dot" style="background:#10b981"></span>All Countries</span>
-                <span class="filter-count">${totalConfigs}</span>
+                <span class="filter-count">${countryTotal.toLocaleString()}</span>
             </div>` +
             countries
                 .map((c) => {
@@ -296,6 +839,61 @@
                 </div>`;
                 })
                 .join("");
+        renderPingFilters();
+    }
+
+    function renderPingFilters() {
+        const container = $("#pingFilters");
+        if (!container) return;
+        const cats = [
+            { key: "fast", label: "Fast (<150ms)", color: "#22c55e" },
+            { key: "mid", label: "Medium (150-300ms)", color: "#eab308" },
+            { key: "slow", label: "Slow (>300ms)", color: "#f97316" },
+            { key: "dead", label: "Unreachable / Error", color: "#ef4444" },
+            { key: "untested", label: "Not tested", color: "#64748b" },
+        ];
+        api()
+            .get_ping_stats()
+            .then((r) => {
+                let counts = null;
+                try {
+                    counts = JSON.parse(r);
+                } catch (e) {}
+                const stats = counts && typeof counts.total === "number" ? counts : null;
+                if (stats) {
+                    pingStats = stats;
+                    renderPingFilterBox(container, cats, stats);
+                } else {
+                    renderPingFilterBox(container, cats, null);
+                }
+                renderTable();
+            })
+            .catch(() => {
+                renderPingFilterBox(container, cats, null);
+                renderTable();
+            });
+    }
+
+    function renderPingFilterBox(container, cats, counts) {
+        const totalAll = counts ? counts.total : totalConfigs;
+        const allActive = activePingFilters.size === 0 ? " active" : "";
+        container.innerHTML =
+            `<div class="filter-item${allActive}" data-ping="__all__">
+                <span><span class="filter-dot" style="background:#8b5cf6"></span>All Pings</span>
+                <span class="filter-count">${totalAll.toLocaleString()}</span>
+            </div>` +
+            cats
+                .map((cat) => {
+                    const active = activePingFilters.has(cat.key) ? " active" : "";
+                    const n = counts ? (counts[cat.key] || 0) : "?";
+                    const num = typeof n === "number" ? n.toLocaleString() : n;
+                    return `
+                <div class="filter-item${active}" data-ping="${cat.key}">
+                    <span><span class="filter-dot" style="background:${cat.color}"></span>${cat.label}</span>
+                    <span class="filter-count">${num}</span>
+                </div>`;
+                })
+                .join("");
     }
 
     function renderHeaderState() {
@@ -304,7 +902,7 @@
             const ind = th.querySelector(".sort-indicator");
             if (sortState.key === key) {
                 th.classList.add("active");
-                ind.textContent = sortState.dir === 1 ? "▲" : "▼";
+                ind.textContent = sortState.dir === 1 ? "?" : "?";
             } else {
                 th.classList.remove("active");
                 ind.textContent = "";
@@ -320,11 +918,42 @@
             sortState.dir = 1;
         }
         renderHeaderState();
-        loadConfigs(true);
+        if (key === "ping") {
+            sortByPing();
+        } else {
+            currentPage = 0;
+            showBusy("Sorting...");
+            loadConfigs(true).then(() => hideBusy());
+        }
     }
 
-    function showProgress(label) {
-        $("#progressText").textContent = label;
+    function sortByPing() {
+        const dir = sortState.dir;
+        allConfigs.sort((a, b) => {
+            const ma = latencyKey(a);
+            const mb = latencyKey(b);
+            if (ma === -1 && mb === -1) return 0;
+            if (ma === -1) return 1;
+            if (mb === -1) return -1;
+            return (ma - mb) * dir;
+        });
+        renderTable();
+    }
+
+    function latencyKey(c) {
+        const r = latencyResults.get((c.server || "") + ":" + (c.port || 0));
+        return r && typeof r.ms === "number" ? r.ms : -1;
+    }
+
+    function showProgress(icon, title, label) {
+        progressStartTime = Date.now();
+        const tIcon = $("#progressIcon");
+        const tText = $("#progressTitleText");
+        const tTime = $("#progressTime");
+        if (tIcon) tIcon.textContent = icon || "🔥";
+        if (tText) tText.textContent = title || "Working...";
+        if (tTime) tTime.textContent = "";
+        $("#progressText").textContent = label || "";
         $("#progressBar").style.width = "0%";
         $("#progressCount").textContent = "0 configs";
         $("#progressOverlay").style.display = "flex";
@@ -335,7 +964,59 @@
     function stopProgressPolling() {
         if (progressTimer) {
             clearInterval(progressTimer);
+            clearTimeout(progressTimer);
             progressTimer = null;
+        }
+    }
+
+    async function refreshLivePage() {
+        const job = ++loadJob;
+        const gen = searchGen;
+        const page = currentPage;
+        const query = ($("#searchInput").value || "").trim();
+        const ping = activePingFilters.size ? [...activePingFilters].join(",") : "";
+        let res;
+        try {
+            res = JSON.parse(
+                await api().get_configs(
+                    query,
+                    JSON.stringify({ protocols: [...activeFilters], countries: [...activeCountries] }),
+                    sortState.key,
+                    sortState.dir,
+                    currentPage * PAGE_SIZE,
+                    PAGE_SIZE,
+                    ping
+                )
+            );
+        } catch (e) {
+            return;
+        }
+        if (job !== loadJob || gen !== searchGen || page !== currentPage) return;
+        totalConfigs = res.total || 0;
+        updateConfigCounter();
+        updatePagination();
+        const rows = res.configs || [];
+        const total = res.total || 0;
+        if (rows.length === 0 && total > 0) {
+            return;
+        }
+        const shown = allConfigs.length;
+        if (shown === 0 && rows.length > 0) {
+            allConfigs = rows;
+            renderTable();
+            return;
+        }
+        if (rows.length > shown) {
+            const tail = rows.slice(shown);
+            allConfigs = rows;
+            const tbody = document.querySelector("#configBody");
+            if (tbody && tbody.rows.length > 0) {
+                tbody.insertAdjacentHTML("beforeend", buildRowsHtml(tail, currentPage * PAGE_SIZE + shown));
+            } else {
+                renderTable();
+            }
+        } else {
+            allConfigs = rows;
         }
     }
 
@@ -344,14 +1025,58 @@
         liveRefreshTimer = setTimeout(() => {
             liveRefreshTimer = null;
             const job = ++liveRefreshJob;
-            loadConfigs(true, false, { keepScroll: true }).then(() => {
+            const pingActive = livePingRefresh;
+            refreshLivePage().then(() => {
                 if (job === liveRefreshJob) renderFilters();
+                if (job === liveRefreshJob && pingActive) applySessionPings();
             });
         }, 800);
     }
 
+    function showSearchingState(label, hint) {
+        searchStateActive = true;
+        searchStartTime = Date.now();
+        stopSearchTimer();
+        searchTimerId = setInterval(updateSearchTimer, 1000);
+        const def = $("#emptyDefault");
+        const searching = $("#emptySearching");
+        const txt = $("#emptySearchingText");
+        const hintEl = document.querySelector(".searching-hint");
+        if (def) def.style.display = "none";
+        if (searching) searching.style.display = "none";
+        if (txt) txt.textContent = label || "Searching...";
+        if (hintEl) hintEl.textContent = hint || "";
+        updateSearchTimer();
+    }
+
+    function updateSearchTimer() {
+        const el = $("#searchingTime");
+        if (!el) return;
+        const elapsed = Math.max(0, Math.floor((Date.now() - searchStartTime) / 1000));
+        const m = Math.floor(elapsed / 60);
+        const s = elapsed % 60;
+        el.textContent = "⏱ " + (m > 0 ? m + "m " : "") + s + "s";
+    }
+
+    function stopSearchTimer() {
+        if (searchTimerId) {
+            clearInterval(searchTimerId);
+            searchTimerId = null;
+        }
+    }
+
+    function hideSearchingState() {
+        searchStateActive = false;
+        stopSearchTimer();
+        const def = $("#emptyDefault");
+        const searching = $("#emptySearching");
+        if (def) def.style.display = "none";
+        if (searching) searching.style.display = "none";
+    }
+
     function hideProgress() {
         stopProgressPolling();
+        hideSearchingState();
         $("#progressOverlay").style.display = "none";
     }
 
@@ -379,19 +1104,52 @@
             }
             $("#progressText").textContent = label;
             $("#progressBar").style.width = pct + "%";
+            const tTime = $("#progressTime");
+            if (tTime && progressStartTime) {
+                const elapsed = Math.max(0, Math.round((Date.now() - progressStartTime) / 1000));
+                const h = Math.floor(elapsed / 3600);
+                const m = Math.floor((elapsed % 3600) / 60);
+                const s = elapsed % 60;
+                const pad = (n) => String(n).padStart(2, "0");
+                tTime.textContent = (h > 0 ? h + ":" : "") + pad(m) + ":" + pad(s);
+            }
             const count = typeof p.count === "number" ? p.count : null;
             if (count !== null) {
                 $("#progressCount").textContent = count.toLocaleString() + " configs written";
             }
             if (count !== null && phase !== "done" && phase !== "idle") {
-                if (lastKnownCount === null) {
-                    lastKnownCount = count;
-                } else if (count !== lastKnownCount) {
+                if (count !== lastKnownCount || (count > 0 && allConfigs.length === 0)) {
                     lastKnownCount = count;
                     scheduleLiveRefresh();
                 }
             }
+            if (phase === "done" || phase === "error") {
+                await finishBgWhenDone();
+            }
         } catch (e) { /* ignore transient errors */ }
+    }
+
+    let bgDoneHandled = false;
+    async function finishBgWhenDone() {
+        const overlay = document.getElementById("progressOverlay");
+        if (!overlay || overlay.style.display !== "flex") return true;
+        if (bgDoneHandled) return true;
+        try {
+            const result = JSON.parse(await api().get_bg_result());
+            if (result.status === "running") {
+                return false;
+            }
+            bgDoneHandled = true;
+            if (result.error) {
+                hideProgress();
+                toast("Scan failed: " + result.error, "error");
+                return true;
+            }
+            applyFetchResult(result);
+            return true;
+        } catch (e) {
+            return false;
+        }
     }
 
     async function showQr(id) {
@@ -462,20 +1220,28 @@
     }
 
     async function handleFetch() {
+        requestTask("fetch", () => handleFetchInner());
+    }
+
+    async function handleFetchInner() {
         const raw = ($("#urlInput").value || "").trim();
         const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
         const isUrl = (l) => /^https?:\/\/\S+/i.test(l);
 
         if (lines.length === 0) {
-            showProgress("Scanning the web for sources...");
+            showProgress("🔍", "Scanning the web", "Searching the web for new config sources...");
             lastKnownCount = null;
+            livePingRefresh = $("#scanWebPingCb").checked;
             totalConfigs = 0;
             allConfigs = [];
+            searchGen++;
+            clearPingResults();
+            showSearchingState("Scanning the web...", "Searching the web for new sources ? found configs will appear here as they are discovered.");
             renderTable();
             renderFilters();
             try {
-                const res = JSON.parse(await api().fetch_sources(""));
-                applyFetchResult(res);
+await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
+                startBgPoller();
             } catch (e) {
                 hideProgress();
                 toast("Scan failed: " + e.message, "error");
@@ -486,10 +1252,10 @@
         const invalid = lines.filter((l) => !isUrl(l));
         if (invalid.length > 0) {
             const shown = invalid.slice(0, 3)
-                .map((l) => `"${l.length > 40 ? l.slice(0, 40) + "…" : l}"`)
+                .map((l) => `"${l.length > 40 ? l.slice(0, 40) + "?" : l}"`)
                 .join(", ");
             const more = invalid.length > 3 ? ` (+${invalid.length - 3} more)` : "";
-            toast(`Skipped ${invalid.length} invalid line(s) — only http/https subscription URLs allowed: ${shown}${more}`, "error");
+            toast(`Skipped ${invalid.length} invalid line(s) ? only http/https subscription URLs allowed: ${shown}${more}`, "error");
             $("#urlInput").focus();
         }
 
@@ -499,15 +1265,18 @@
             return;
         }
 
-        showProgress("Fetching sources...");
+        showProgress("📡", "Fetching sources", "Fetching configs from subscription URLs...");
         lastKnownCount = null;
+        livePingRefresh = $("#scanWebPingCb").checked;
         totalConfigs = 0;
         allConfigs = [];
+        searchGen++;
+        clearPingResults();
         renderTable();
         renderFilters();
         try {
-            const res = JSON.parse(await api().fetch_sources(valid.join("\n")));
-            applyFetchResult(res);
+            await api().start_bg("fetch_urls", valid.join("\n"), $("#scanWebPingCb").checked ? 1 : 0);
+            startBgPoller();
         } catch (e) {
             hideProgress();
             toast("Fetch failed: " + e.message, "error");
@@ -515,25 +1284,33 @@
     }
 
     async function handleFetchTelegram() {
+        requestTask("telegram", () => handleFetchTelegramInner());
+    }
+
+    async function handleFetchTelegramInner() {
         const raw = ($("#urlInput").value || "").trim();
         const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
         const isTg = (l) => /t\.me\//i.test(l) || /^@[A-Za-z0-9_]+$/i.test(l);
         const tg = lines.filter(isTg);
 
         if (lines.length > 0 && tg.length === 0) {
-            toast("Telegram channels not found in Sources. Enter channel links like @name or t.me/s/name — or leave empty to use the 157 built-in channels.", "error");
+            toast("Telegram channels not found in Sources. Enter channel links like @name or t.me/s/name ? or leave empty to use the 157 built-in channels.", "error");
             return;
         }
 
-        showProgress(tg.length ? `Scanning Telegram: ${tg.length} channel(s)...` : "Scanning 157 Telegram channels...");
+        showProgress("✈️", "Scanning Telegram", tg.length ? `Scanning ${tg.length} Telegram channel(s)...` : "Scanning 157 Telegram channels...");
         lastKnownCount = null;
+        livePingRefresh = $("#tgPingCb").checked;
         totalConfigs = 0;
         allConfigs = [];
+        searchGen++;
+        clearPingResults();
+        showSearchingState("Scanning Telegram...", "Searching Telegram channels ? found configs will appear here as they are discovered.");
         renderTable();
         renderFilters();
         try {
-            const res = JSON.parse(await api().fetch_telegram(tg.join("\n")));
-            applyFetchResult(res);
+            await api().start_bg("fetch_telegram", tg.join("\n"), $("#tgPingCb").checked ? 1 : 0);
+            startBgPoller();
         } catch (e) {
             hideProgress();
             toast("Telegram fetch failed: " + e.message, "error");
@@ -541,23 +1318,83 @@
     }
 
     async function handleScanWeb() {
-        showProgress("Scanning the web for sources...");
+        requestTask("scan", () => handleScanWebInner());
+    }
+
+    async function handleScanWebInner() {
+        showProgress("🔍", "Scanning the web", "Searching the web for new config sources...");
         lastKnownCount = null;
+        livePingRefresh = $("#scanWebPingCb").checked;
         totalConfigs = 0;
         allConfigs = [];
+        clearPingResults();
+        showSearchingState("Scanning the web...", "Searching the web for new sources ? found configs will appear here as they are discovered.");
         renderTable();
         renderFilters();
         try {
-            const res = JSON.parse(await api().fetch_sources(""));
-            applyFetchResult(res);
+            await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
+            startBgPoller();
         } catch (e) {
             hideProgress();
             toast("Scan failed: " + e.message, "error");
         }
     }
 
+    function startBgPoller() {
+        bgDoneHandled = false;
+        stopProgressPolling();
+        const poll = async () => {
+            try {
+                const overlay = document.getElementById("progressOverlay");
+                if (overlay.style.display !== "flex") return;
+                const p = JSON.parse(await api().get_progress());
+                const phase = p.phase || "idle";
+                let label = p.detail || "Working...";
+                let pct = 0;
+                if (phase === "discovering") {
+                    label = "Scanning the web... " + (p.detail || "");
+                    pct = p.total ? Math.round((p.current / p.total) * 100) : 0;
+                } else if (phase === "fetching") {
+                    label = "Fetching sources (" + p.current + "/" + p.total + ")...";
+                    pct = p.total ? Math.round((p.current / p.total) * 100) : 0;
+                } else if (phase === "starting") {
+                    label = "Starting scan...";
+                    pct = 0;
+                }
+                $("#progressText").textContent = label;
+                $("#progressBar").style.width = pct + "%";
+                const tTime = $("#progressTime");
+                if (tTime && progressStartTime) {
+                    tTime.textContent = "⏱ " + fmtElapsed(Math.max(0, Math.round((Date.now() - progressStartTime) / 1000)));
+                }
+                const count = typeof p.count === "number" ? p.count : null;
+                if (count !== null) {
+                    $("#progressCount").textContent = count.toLocaleString() + " configs written";
+                }
+                if (count !== null && phase !== "done" && phase !== "idle") {
+                    if (count !== lastKnownCount || (count > 0 && allConfigs.length === 0)) {
+                        lastKnownCount = count;
+                        scheduleLiveRefresh();
+                    }
+                }
+                if (phase === "done" || phase === "error") {
+                    if (await finishBgWhenDone()) return;
+                    setTimeout(poll, 300);
+                    return;
+                }
+                setTimeout(poll, 500);
+            } catch (e) {
+                hideProgress();
+                toast("Scan failed: " + e.message, "error");
+            }
+        };
+        progressTimer = setTimeout(poll, 300);
+    }
+
     async function applyFetchResult(res) {
+        currentTask = null;
         hideProgress();
+        hideSearchingState();
         lastKnownCount = res.total || 0;
         if (liveRefreshTimer) {
             clearTimeout(liveRefreshTimer);
@@ -566,15 +1403,28 @@
         if (res.discovered && res.discovered.length > 0) {
             showDiscovered(res.discovered);
         }
-        await loadConfigs(true);
-        await ensureLoaded(MAX_VISIBLE);
+        currentPage = 0;
+        totalConfigs = res.total || 0;
+        const target = Math.min(PAGE_SIZE, totalConfigs);
+        if (target === 0) {
+            await loadConfigs(true);
+        } else if (allConfigs.length < target) {
+            await refreshLivePage();
+        }
+        updateConfigCounter();
+        updatePagination();
         renderFilters();
+        if (livePingRefresh) {
+            await applySessionPings();
+        }
+        livePingRefresh = false;
+        playFinishChime();
         if (res.cancelled) {
-            toast(`Scan cancelled — ${res.total} configs loaded so far`, "info");
+            toast(`Scan cancelled ? ${res.total} configs loaded so far`, "info");
         } else if ((res.added || 0) > 0) {
-            toast(`Added ${res.added} new config — ${res.total} total`, "success");
+            toast(`Added ${res.added} new config ? ${res.total} total`, "success");
         } else if (res.total > 0) {
-            toast(`No new configs — everything was already saved (${res.total} total)`, "info");
+            toast(`No new configs ? everything was already saved (${res.total} total)`, "info");
         }
     }
 
@@ -589,10 +1439,15 @@
     }
 
     async function handleImportFile() {
+        requestTask("import_file", () => handleImportFileInner());
+    }
+
+    async function handleImportFileInner() {
         try {
-            showProgress("Importing file...");
+            showProgress("📂", "Importing file", "Importing configs from file...");
             const res = JSON.parse(await api().import_from_file(""));
             hideProgress();
+            currentTask = null;
             if (res.cancelled) return;
             if (res.error) {
                 toast(res.error, "error");
@@ -601,8 +1456,8 @@
             if (res.errors && res.errors.length > 0) {
                 res.errors.forEach((e) => toast(e, "error"));
             }
+            currentPage = 0;
             await loadConfigs(true);
-            await ensureLoaded(MAX_VISIBLE);
             renderFilters();
             toast(`Loaded ${res.total} configs from file`, "success");
         } catch (e) {
@@ -612,6 +1467,10 @@
     }
 
     async function handleRawImport() {
+        requestTask("raw_import", () => handleRawImportInner());
+    }
+
+    async function handleRawImportInner() {
         const text = $("#rawTextInput").value.trim();
         if (!text) {
             toast("Paste some configs first", "error");
@@ -623,11 +1482,13 @@
             $("#rawTextInput").value = "";
             $("#rawTextInput").style.display = "none";
             $("#rawSubmitRow").style.display = "none";
+            currentPage = 0;
             await loadConfigs(true);
-            await ensureLoaded(MAX_VISIBLE);
             renderFilters();
+            currentTask = null;
             toast(`Loaded ${res.total} configs`, "success");
         } catch (e) {
+            currentTask = null;
             toast("Parse failed", "error");
         }
     }
@@ -684,16 +1545,96 @@
     }
 
     async function handleClearAll() {
-        if (!confirm("Clear all saved configs?")) return;
+        const ok = await showConfirm({ title: "Clear All Configs", message: "This will permanently delete ALL saved configs. This cannot be undone.", icon: "🗑️", yesLabel: "Clear All", noLabel: "Cancel" });
+        if (!ok) return;
         try {
             await api().clear_all();
             totalConfigs = 0;
             allConfigs = [];
+            searchGen++;
             renderTable();
             renderFilters();
             toast("All configs cleared", "success");
         } catch (e) {
             toast("Clear failed", "error");
+        }
+    }
+
+    let clickCtx = null;
+    function playClickSound() {
+        try {
+            clickCtx = clickCtx || new (window.AudioContext || window.webkitAudioContext)();
+            const t = clickCtx.currentTime;
+            const osc = clickCtx.createOscillator();
+            const gain = clickCtx.createGain();
+            osc.type = "sine";
+            osc.frequency.setValueAtTime(1400, t);
+            osc.frequency.exponentialRampToValueAtTime(600, t + 0.03);
+            gain.gain.setValueAtTime(0.04, t);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+            osc.connect(gain);
+            gain.connect(clickCtx.destination);
+            osc.start(t);
+            osc.stop(t + 0.06);
+        } catch (e) {}
+    }
+
+    function playFinishChime() {
+        try {
+            clickCtx = clickCtx || new (window.AudioContext || window.webkitAudioContext)();
+            const beep = (at, freq, dur) => {
+                const osc = clickCtx.createOscillator();
+                const gain = clickCtx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(freq, at);
+                gain.gain.setValueAtTime(0, at);
+                gain.gain.linearRampToValueAtTime(0.06, at + 0.015);
+                gain.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+                osc.connect(gain);
+                gain.connect(clickCtx.destination);
+                osc.start(at);
+                osc.stop(at + dur + 0.02);
+            };
+            const t0 = clickCtx.currentTime;
+            beep(t0, 880, 0.22);
+            beep(t0 + 0.3, 880, 0.22);
+            beep(t0 + 0.6, 1175, 0.45);
+        } catch (e) {}
+    }
+
+    async function handleDeleteFiltered() {
+        const query = ($("#searchInput").value || "").trim();
+        const hasFilter = query || activeFilters.size || activePingFilters.size || activeCountries.size;
+        if (!hasFilter) {
+            toast("No active filter or search to delete", "info");
+            return;
+        }
+        const parts = [];
+        if (query) parts.push("search");
+        if (activeFilters.size) parts.push(activeFilters.size + " protocol filter(s)");
+        if (activeCountries.size) parts.push(activeCountries.size + " country filter(s)");
+        if (activePingFilters.size) parts.push(activePingFilters.size + " ping filter(s)");
+        const detail = parts.length > 0 ? "Active: " + parts.join(", ") : "current filter";
+        const ok = await showConfirm({ title: "Delete Filtered Configs", message: "Delete only the rows matching the " + detail + ". All other configs stay.", icon: "🗑️", yesLabel: "Delete", noLabel: "Cancel" });
+        if (!ok) return;
+        try {
+            const res = JSON.parse(
+                await api().delete_filtered(
+                    query,
+                    JSON.stringify({ protocols: [...activeFilters], countries: [...activeCountries] }),
+                    activePingFilters.size ? [...activePingFilters].join(",") : ""
+                )
+            );
+            if (!res.success) throw new Error("bad");
+            $("#searchInput").value = "";
+            activeFilters.clear();
+            activeCountries.clear();
+            activePingFilters.clear();
+            await loadConfigs(true);
+            renderFilters();
+            toast("Deleted " + (res.deleted || 0).toLocaleString() + " filtered configs", "success");
+        } catch (e) {
+            toast("Delete filtered failed", "error");
         }
     }
 
@@ -761,7 +1702,15 @@
     }
 
     async function handleDelete(id) {
-        if (!confirm("Delete this config?")) return;
+        let label = "this config";
+        try {
+            const row = allConfigs.find((c) => c.id === id);
+            if (row && (row.name || row.server)) {
+                label = (row.name || "").trim() || row.server;
+            }
+        } catch (e) {}
+        const ok = await showConfirm({ title: "Delete Config", message: "Delete \"" + label + "\" permanently?", icon: "🗑️", yesLabel: "Delete", noLabel: "Cancel" });
+        if (!ok) return;
         try {
             await api().delete_config(id);
             toast("Deleted", "success");
@@ -797,19 +1746,44 @@
         $("#exportB64Btn").addEventListener("click", handleCopyB64);
         $("#exportFileBtn").addEventListener("click", () => handleExportFile($("#exportFormat").value));
         $("#clearAllBtn").addEventListener("click", handleClearAll);
+        $("#deleteFilteredBtn").addEventListener("click", handleDeleteFiltered);
+        document.addEventListener("click", () => playClickSound(), true);
         let searchTimer = null;
         $("#searchInput").addEventListener("input", () => {
             clearTimeout(searchTimer);
-            searchTimer = setTimeout(() => loadConfigs(true), 250);
+            searchTimer = setTimeout(() => refreshFilteredTable(), 250);
         });
         $("#clearSearchBtn").addEventListener("click", () => {
             $("#searchInput").value = "";
-            loadConfigs(true);
+            refreshFilteredTable();
             $("#searchInput").focus();
         });
         $("#cancelScanBtn").addEventListener("click", handleCancelScan);
-        $("#topBtn").addEventListener("click", jumpTop);
-        $("#bottomBtn").addEventListener("click", jumpBottom);
+        $("#pingAllBtn").addEventListener("click", handlePingAll);
+        $("#confirmNoBtn").addEventListener("click", () => {
+            $("#confirmModal").style.display = "none";
+            pendingTaskWork = null;
+        });
+        $("#confirmYesBtn").addEventListener("click", async () => {
+            $("#confirmModal").style.display = "none";
+            const work = pendingTaskWork;
+            pendingTaskWork = null;
+            if (!work) return;
+            await stopCurrentTask();
+            work();
+        });
+        $("#confirmModal").addEventListener("click", (e) => {
+            if (e.target === $("#confirmModal")) {
+                $("#confirmModal").style.display = "none";
+                pendingTaskWork = null;
+            }
+        });
+        $("#prevPageBtn").addEventListener("click", () => goToPage(currentPage - 1));
+        $("#nextPageBtn").addEventListener("click", () => goToPage(currentPage + 1));
+        const firstBtn = $("#firstPageBtn");
+        if (firstBtn) firstBtn.addEventListener("click", goToFirstRow);
+        const lastBtn = $("#lastPageBtn");
+        if (lastBtn) lastBtn.addEventListener("click", goToLastRow);
         $("#modalClose").addEventListener("click", () => {
             $("#detailModal").style.display = "none";
         });
@@ -862,6 +1836,11 @@
                 copyConfig(parseInt(copyBtn.dataset.id));
                 return;
             }
+            const pingBtn = e.target.closest(".ping-btn");
+            if (pingBtn) {
+                handlePing(pingBtn);
+                return;
+            }
             const qrBtn = e.target.closest(".qr-btn");
             if (qrBtn) {
                 showQr(parseInt(qrBtn.dataset.id));
@@ -892,8 +1871,23 @@
                     activeFilters.add(type);
                 }
             }
-            loadConfigs(true);
-            renderFilters();
+            refreshFilteredTable(item);
+        });
+
+        $("#pingFilters").addEventListener("click", (e) => {
+            const item = e.target.closest(".filter-item");
+            if (!item) return;
+            const ping = item.dataset.ping;
+            if (ping === "__all__") {
+                activePingFilters.clear();
+            } else {
+                if (activePingFilters.has(ping)) {
+                    activePingFilters.delete(ping);
+                } else {
+                    activePingFilters.add(ping);
+                }
+            }
+            refreshFilteredTable(item);
         });
 
         $("#countryFilters").addEventListener("click", (e) => {
@@ -909,34 +1903,22 @@
                     activeCountries.add(country);
                 }
             }
-            loadConfigs(true);
-            renderFilters();
+            refreshFilteredTable(item);
         });
 
         $("#themeToggle").addEventListener("click", () => {
             document.body.classList.toggle("dark");
             const isDark = document.body.classList.contains("dark");
-            $("#themeToggle").textContent = isDark ? "☀" : "☾";
+            $("#themeToggle").textContent = isDark ? "🌙" : "☀️";
         });
 
         $("#welcomeClose").addEventListener("click", closeWelcome);
 
-        $("#aboutBtn").addEventListener("click", openWelcome);
+        $("#aboutBtn").addEventListener("click", () => {
+            document.getElementById("aboutModal").style.display = "flex";
+        });
 
-        const wrap = document.querySelector(".table-wrapper");
-        if (wrap) {
-            wrap.addEventListener("scroll", () => {
-                requestVirtRender();
-                if (!scrollTimer) {
-                    scrollTimer = setTimeout(() => {
-                        scrollTimer = null;
-                        maybeLoadMore();
-                    }, 150);
-                }
-            }, { passive: true });
-        }
-
-        window.addEventListener("resize", () => requestVirtRender());
+        window.addEventListener("resize", () => { recalcPageSize(); });
 
         $("#discoveredList").addEventListener("click", (e) => {
             const item = e.target.closest(".discovered-item");
@@ -949,34 +1931,76 @@
         });
 
         document.addEventListener("keydown", (e) => {
-            if (e.key === "Escape" && $("#progressOverlay").style.display === "flex") {
-                e.preventDefault();
-                handleCancelScan();
+            if (e.key === "Escape") {
+                if ($("#progressOverlay").style.display === "flex") {
+                    e.preventDefault();
+                    handleCancelScan();
+                }
+                if (document.getElementById("aboutModal").style.display === "flex") {
+                    document.getElementById("aboutModal").style.display = "none";
+                }
             }
+            if (e.ctrlKey && e.key === "f") {
+                e.preventDefault();
+                const searchInput = document.getElementById("searchInput");
+                searchInput.focus();
+                searchInput.select();
+            }
+            if (e.ctrlKey && e.key === "r") {
+                e.preventDefault();
+                handleScanWeb();
+            }
+            if (e.ctrlKey && e.key === "l") {
+                e.preventDefault();
+                document.getElementById("urlInput").focus();
+            }
+            if (e.ctrlKey && e.key === "e") {
+                e.preventDefault();
+                handleExportConfigs();
+            }
+            if (e.ctrlKey && e.key === "i") {
+                e.preventDefault();
+                handleImportFile();
+            }
+            if (e.ctrlKey && e.key === "d") {
+                e.preventDefault();
+                handleDetails();
+            }
+        });
+
+        document.getElementById("aboutClose").addEventListener("click", () => {
+            document.getElementById("aboutModal").style.display = "none";
+        });
+        document.getElementById("aboutCloseBtn").addEventListener("click", () => {
+            document.getElementById("aboutModal").style.display = "none";
         });
     }
 
-    function jumpTop() {
-        wrapScrollEl().scrollTop = 0;
-        requestVirtRender();
-    }
-
-    async function jumpBottom() {
-        if (allConfigs.length < totalConfigs) {
-            await ensureLoaded(MAX_VISIBLE);
-            if (allConfigs.length < totalConfigs) {
-                toast("Max visible rows reached — showing first " + allConfigs.length.toLocaleString() + " rows", "info");
-            }
-        }
-        wrapScrollEl().scrollTop = allConfigs.length * ROW_H;
-        renderWindow(true);
-    }
-
     function handleCancelScan() {
-        $("#progressText").textContent = "Cancelling...";
+        currentTask = null;
+        const wasPing = pingAllRunning;
+        if (wasPing) {
+            pingAllCancelled = true;
+            stopPingPoller();
+        }
         api()
             .cancel()
-            .catch(() => {});
+            .then(() => {
+                if (wasPing) {
+                    pingAllRunning = false;
+                    pingAllCancelled = false;
+                    updatePingAllBtnState();
+                }
+                hideProgress();
+                if (wasPing) {
+                    resetPingUiState();
+                } else {
+                    clearPingResults();
+                }
+            })
+            .catch(() => {
+                hideProgress();
+            });
     }
 
     function openWelcome() {
@@ -1004,10 +2028,37 @@
             .catch(() => openWelcome());
     }
 
+    async function loadPingResults() {
+        try {
+            const res = JSON.parse(await api().get_ping_map());
+            const map = res && res.map;
+            if (map) {
+                const keys = Object.keys(map);
+                for (const k of keys) latencyResults.set(k, { ms: map[k], ok: map[k] >= 0 });
+            }
+        } catch (e) {}
+        renderTable();
+        renderPingFilters();
+    }
+
+    async function applySessionPings() {
+        try {
+            const res = JSON.parse(await api().get_ping_session());
+            const map = res && res.map;
+            if (map) {
+                const keys = Object.keys(map);
+                for (const k of keys) latencyResults.set(k, { ms: map[k], ok: map[k] >= 0 });
+            }
+        } catch (e) {}
+        renderTable();
+        renderPingFilters();
+    }
+
     waitForApi(() => {
         initEvents();
         showWelcome();
         loadConfigs();
         renderFilters();
+        loadPingResults();
     });
 })();

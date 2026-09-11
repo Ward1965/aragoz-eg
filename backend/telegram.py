@@ -20,7 +20,7 @@ TELEGRAM_CHANNELS = [
 ]
 
 _CONFIG_RE = re.compile(
-    r"(vless|vmess|trojan|ss|hy2|tuic|wg|socks5|socks4|socks|wireguard)://[^\s\"'<>]+",
+    r"(vless|vmess|trojan|ssr|ss|hy2|hy1|hysteria2|hysteria|tuic|wg|wireguard|socks5|socks4|socks|naive\+https|naive\+h2|naive\+quic|ssh|ikev2|l2tp|pptp|softether)://[^\s\"'<>]+",
     re.I,
 )
 

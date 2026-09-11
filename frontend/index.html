@@ -36,9 +36,11 @@
                     <button id="scanWebBtn" class="btn btn-scan btn-full btn-icon" title="Search the web and load proxies automatically">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg>Scan Web (Auto)
                     </button>
+                    <label class="ping-on-search"><input type="checkbox" id="scanWebPingCb"> Ping each new row</label>
                     <button id="tgFetchBtn" class="btn btn-secondary btn-full btn-icon" title="Fetch configs from Telegram channels (157 built-in channels, or ones you type in Sources)">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>Fetch from Telegram
                     </button>
+                    <label class="ping-on-search"><input type="checkbox" id="tgPingCb"> Ping each new row</label>
                 </div>
                 <div id="discoveredBox" style="display:none;margin-top:8px">
                     <h3>Discovered Sources</h3>
@@ -64,6 +66,11 @@
             <div class="sidebar-section">
                 <h3>Filter by Protocol</h3>
                 <div id="protocolFilters"></div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3>Filter by Ping</h3>
+                <div id="pingFilters"></div>
             </div>
 
             <div class="sidebar-section">
@@ -100,29 +107,61 @@
 
             <div class="sidebar-section">
                 <h3>Danger Zone</h3>
-                <button id="clearAllBtn" class="btn btn-danger btn-full btn-icon" title="Delete all configs">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg>Clear All
+                <button id="deleteFilteredBtn" class="btn btn-danger btn-full btn-icon" title="Delete only the rows shown by the current filters/search">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3H2L10 12.46V19l4 2v-8.54L22 3z"/></svg>Delete Filtered
                 </button>
+                <button id="clearAllBtn" class="btn btn-danger btn-full btn-icon" title="Delete ALL saved configs from the entire database">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg>Clear Everything
+                </button>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="sidebar-footer-row">
+                    <span class="footer-version">v1.3</span>
+                    <span class="footer-sep">|</span>
+                    <span class="footer-label" id="footerDbStatus">DB: Ready</span>
+                </div>
+                <div class="sidebar-footer-row">
+                    <span class="footer-label">Aragoz Lite - Proxy Config Manager</span>
+                </div>
             </div>
         </aside>
 
         <main class="content">
             <div class="toolbar">
                 <div class="search-wrap">
-                    <input type="text" id="searchInput" placeholder="Search name, server, protocol..." class="search-box">
+                    <input type="text" id="searchInput" placeholder="Search name, server, protocol... (Ctrl+F)" class="search-box">
                     <button id="clearSearchBtn" class="icon-btn search-clear" title="Clear search">✕</button>
                 </div>
                 <span id="configCount" class="count-label">0 configs</span>
+                <span id="filteringMsg" class="filtering-msg" style="display:none">
+                    <span class="filtering-spinner"></span>
+                    <span id="filteringMsgText">Filtering...</span>
+                </span>
+                <button id="pingAllBtn" class="btn btn-sm btn-secondary" title="Test latency of all visible configs">Ping All</button>
                 <div class="table-nav">
-                    <button id="topBtn" class="btn btn-sm btn-secondary" title="Scroll to the top of the table">Top</button>
-                    <button id="bottomBtn" class="btn btn-sm btn-secondary" title="Scroll to the bottom of the table">Bottom</button>
+                    <button id="firstPageBtn" class="btn btn-sm btn-secondary" title="First page" disabled>« First</button>
+                    <button id="prevPageBtn" class="btn btn-sm btn-secondary" title="Previous page" disabled>‹ Prev</button>
+                    <span id="pageIndicator" class="page-indicator">Page 1 / 1</span>
+                    <button id="nextPageBtn" class="btn btn-sm btn-secondary" title="Next page" disabled>Next ›</button>
+                    <button id="lastPageBtn" class="btn btn-sm btn-secondary" title="Last page" disabled>Last »</button>
                 </div>
             </div>
 
             <div class="table-wrapper">
                 <div id="emptyState" class="empty-state">
-                    <h3>No configs yet</h3>
-                    <p>Add URLs and press <strong>Fetch</strong>, click <strong>Scan Web (Auto)</strong>, or import a file to get started.</p>
+                    <div id="emptyDefault">
+                        <h3>No configs yet</h3>
+                        <p>Add URLs and press <strong>Fetch</strong>, click <strong>Scan Web (Auto)</strong>, or import a file to get started.</p>
+                    </div>
+                    <div id="emptySearching" style="display:none">
+                        <div class="searching-icon">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                        </div>
+                        <h3 id="emptySearchingText">Searching the web...</h3>
+                        <p class="searching-hint">Fetching sources from the web — new configs will appear in the table as they are found.</p>
+                        <p class="searching-time" id="searchingTime">⏱ 0s</p>
+                    </div>
                 </div>
                 <table id="configTable" class="table-bordered" style="display:none">
                     <thead>
@@ -133,43 +172,98 @@
                             <th class="sortable" data-key="server">Server <span class="sort-indicator"></span></th>
                             <th class="sortable" data-key="port">Port <span class="sort-indicator"></span></th>
                             <th class="sortable" data-key="country">Country <span class="sort-indicator"></span></th>
+                            <th class="sortable" data-key="ping">Ping <span class="sort-indicator"></span></th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody id="configBody"></tbody>
                 </table>
+                <div id="busyOverlay" class="busy-overlay" style="display:none">
+                    <div class="busy-box">
+                        <div class="busy-spinner"></div>
+                        <span id="busyText">Loading...</span>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
 
     <div id="welcomeOverlay" class="welcome-overlay">
         <div class="welcome-card">
-            <img id="welcomeLogo" src="" alt="Aragoz Lite">
-            <h2>Welcome to <span class="welcome-accent">Aragoz Lite</span> <span class="welcome-version">v1.0</span></h2>
-            <p class="welcome-desc">Your all-in-one proxy config manager.</p>
-            <ul class="welcome-features">
-                <li>fetch subscriptions</li>
-                <li>scan the web</li>
-                <li>import your own configs</li>
-            </ul>
-            <p class="welcome-info"><span class="flag-em"><img src="https://flagcdn.com/w40/eg.png" alt="EG" width="18" height="13" loading="lazy"></span> Egypt - Port Said</p>
-            <div class="welcome-btn-row">
-                <button id="welcomeClose" class="btn btn-primary">Get Started</button>
+            <div class="welcome-hero">
+                <div class="welcome-logo-wrap">
+                    <img id="welcomeLogo" src="" alt="Aragoz Lite">
+                    <span class="welcome-logo-glow"></span>
+                </div>
+                <h2 class="welcome-title">Aragoz Lite</h2>
+                <p class="welcome-tagline">Manage your proxy configs — fetch subscriptions, scan the web, or import your own, all in one place.</p>
             </div>
+
+            <div class="welcome-features">
+                <div class="welcome-feature">
+                    <span class="feat-icon" style="--fc:#6366f1">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 17 18z"/><path d="M10 14l2 2 2-2M12 11v5"/></svg>
+                    </span>
+                    <div>
+                        <h4>Fetch</h4>
+                        <p>Load configs from direct subscription links or folders.</p>
+                    </div>
+                </div>
+                <div class="welcome-feature">
+                    <span class="feat-icon" style="--fc:#8b5cf6">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg>
+                    </span>
+                    <div>
+                        <h4>Scan Web</h4>
+                        <p>Auto-discover new sources straight from the web.</p>
+                    </div>
+                </div>
+                <div class="welcome-feature">
+                    <span class="feat-icon" style="--fc:#10b981">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                    </span>
+                    <div>
+                        <h4>Import & Export</h4>
+                        <p>Import files or raw text, and copy results as text or Base64.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="welcome-meta">
+                <span class="welcome-info"><span class="flag-em"><img src="https://flagcdn.com/w40/eg.png" alt="EG" width="18" height="13" loading="lazy"></span> Egypt - Port Said</span>
+                <span class="welcome-version">v1.3</span>
+            </div>
+            <button id="welcomeClose" class="btn btn-primary welcome-cta">Get Started</button>
         </div>
     </div>
 
     <div id="progressOverlay" class="progress-overlay" style="display:none">
         <div class="progress-card">
+            <div id="progressTitle" class="progress-title"><span id="progressIcon" class="progress-icon">🔍</span><span id="progressTitleText">Scanning the web</span></div>
             <div class="spinner"></div>
             <div id="progressText" class="progress-text">Working...</div>
             <div class="progress-bar-wrap">
                 <div id="progressBar" class="progress-bar"></div>
             </div>
             <div id="progressCount" class="progress-count">0 configs</div>
+            <div id="progressTime" class="progress-time"></div>
             <button id="cancelScanBtn" class="btn btn-secondary btn-icon btn-cancel" title="Stop the current scan">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>Cancel (Esc)
                     </button>
+        </div>
+    </div>
+
+    <div id="confirmModal" class="modal" style="display:none">
+        <div class="modal-content" style="max-width:420px; text-align:center">
+            <div class="modal-body" style="padding:28px 24px">
+                <div class="confirm-icon" id="confirmIcon">⚠</div>
+                <h2 id="confirmTitle" class="confirm-title" style="margin:12px 0 8px">Task in progress</h2>
+                <p id="confirmMsg" class="confirm-msg" style="font-size:14px;color:var(--text-muted);line-height:1.6">This will stop the current task and start a new one.</p>
+            </div>
+            <div class="modal-footer" style="justify-content:center; gap:10px; flex-wrap:wrap; border-top:1px solid var(--border); padding:16px 20px">
+                <button id="confirmNoBtn" class="btn btn-secondary" style="min-width:110px">Keep Current</button>
+                <button id="confirmYesBtn" class="btn btn-primary" style="min-width:110px">Stop &amp; Start New</button>
+            </div>
         </div>
     </div>
 
@@ -198,6 +292,33 @@
             </div>
             <div class="modal-footer">
                 <button id="qrCopyBtn" class="btn btn-primary">Copy Link</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="aboutModal" class="modal" style="display:none">
+        <div class="modal-content" style="max-width:420px">
+            <div class="modal-header">
+                <h2>About Aragoz Lite</h2>
+                <button id="aboutClose" class="icon-btn">&times;</button>
+            </div>
+            <div class="modal-body" style="text-align:center; padding:24px">
+                <div style="font-size:32px; margin-bottom:8px;">🔥</div>
+                <h3 style="margin:0 0 4px">Aragoz Lite</h3>
+                <p style="color:var(--text-muted); font-size:12px; margin:0 0 16px">Version 1.3</p>
+                <div style="text-align:left; background:var(--bg-tertiary); border-radius:8px; padding:12px 16px; font-size:12px; line-height:2">
+                    <strong>Keyboard Shortcuts</strong><br>
+                    <kbd class="kbd">Ctrl+F</kbd> Focus search<br>
+                    <kbd class="kbd">Ctrl+R</kbd> Scan web<br>
+                    <kbd class="kbd">Ctrl+L</kbd> Focus URL input<br>
+                    <kbd class="kbd">Ctrl+E</kbd> Export configs<br>
+                    <kbd class="kbd">Ctrl+I</kbd> Import from file<br>
+                    <kbd class="kbd">Ctrl+D</kbd> Show details
+                </div>
+                <p style="color:var(--text-muted); font-size:11px; margin:12px 0 0">A lightweight proxy config manager with auto-discovery, dark mode, and QR code support.</p>
+            </div>
+            <div class="modal-footer">
+                <button id="aboutCloseBtn" class="btn btn-primary">OK</button>
             </div>
         </div>
     </div>
