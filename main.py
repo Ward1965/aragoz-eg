@@ -57,8 +57,8 @@ def _build_welcome_html():
 <title>Aragoz Lite</title>
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
-  html, body {{ height:100%; overflow:hidden; background:#0f172a; font-family:'Segoe UI',Tahoma,Arial,sans-serif; }}
-  .card {{ position:relative; width:calc(100% - 28px); height:calc(100% - 28px); margin:14px;
+  html, body {{ height:100%; overflow:hidden; background:#1e293b; font-family:'Segoe UI',Tahoma,Arial,sans-serif; }}
+  .card {{ position:relative; width:calc(100% - 4px); height:calc(100% - 4px); margin:2px;
            background:#1e293b; border:1px solid #EE88DF; border-radius:18px; padding:32px 36px 76px;
            text-align:center; color:#e2e8f0;
            box-shadow:0 24px 64px rgba(0,0,0,0.35);
