@@ -5,11 +5,16 @@
    - line ~130: `<span class="footer-version">vX.Y</span>`
    - line ~244: `<span class="welcome-version">vX.Y</span>` (the splash/welcome overlay)
    Ask the user for the new version number if they did not specify it.
-2. Rebuild the program for all required systems (Windows / macOS arm64 / Linux x64):
+2. **ALWAYS update the boot-splash image too** — the PyInstaller boot splash
+   (`pyi_splash`, baked from `splash_b64.py`) contains the version as gold text near the
+   bottom-right. Regenerate that text (e.g. run `_fix_splash_version.py` with the new
+   version) so `splash_b64.py` shows `vX.Y`. The user explicitly requires the version in
+   BOTH the in-app welcome overlay AND the boot splash image.
+3. Rebuild the program for all required systems (Windows / macOS arm64 / Linux x64):
    - Local Windows build: PyInstaller onefile (`Aragoz Lite.spec`) then sign.
    - The other systems build automatically via the CI workflow when the tag is pushed
      (.github/workflows/build.yml builds on `v*` tags and creates a GitHub Release).
-3. Commit + tag (`vX.Y`) + push to origin (https://github.com/Ward1965/aragoz.git, branch main).
+4. Commit + tag (`vX.Y`) + push to origin (https://github.com/Ward1965/aragoz.git, branch main).
 
 ## Local Windows build pattern (only working one — PowerShell)
 - First kill: `Get-Process -Name "Aragoz Lite"` and `python` → Stop-Process -Force
