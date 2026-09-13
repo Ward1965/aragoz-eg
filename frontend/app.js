@@ -20,6 +20,15 @@
     let loadedOffset = 0;
     let currentPage = 0;
     let loadingMore = false;
+    let navLoading = false;
+    let navInFlight = false;
+    let navPending = null;
+    let pageCache = new Map();
+    let cacheCtx = null;
+    let prefetchJob = 0;
+    let fetchInFlight = 0;
+    let selectedRowIndex = 0;
+    let rowSelectionActive = false;
     let scrollTimer = null;
     let lastKnownCount = null;
     let livePingRefresh = false;
@@ -102,11 +111,199 @@
         ind.textContent = "Page " + (currentPage + 1) + " / " + pc;
     }
 
-    function goToPage(page) {
+    function currentCtxKey() {
+        const q = ($("#searchInput").value || "").trim();
+        return (q + "|" + sortState.key + "|" + sortState.dir +
+            "|" + JSON.stringify([...activeFilters]) +
+            "|" + JSON.stringify([...activeCountries]) +
+            "|" + [...activePingFilters].sort().join(","));
+    }
+
+    function trimPageCache() {
+        while (pageCache.size > 24) {
+            const keys = [...pageCache.keys()];
+            const pc = pageCount();
+            const guards = new Set([0, 1, Math.max(0, pc - 1), Math.max(0, pc - 2)]);
+            let evict = null;
+            let bestDist = -1;
+            for (const k of keys) {
+                if (guards.has(k)) continue;
+                const d = Math.abs(k - currentPage);
+                if (d > bestDist) {
+                    bestDist = d;
+                    evict = k;
+                }
+            }
+            if (evict === null) {
+                let farDist = -1;
+                for (const k of keys) {
+                    const d = Math.abs(k - currentPage);
+                    if (d > farDist) {
+                        farDist = d;
+                        evict = k;
+                    }
+                }
+            }
+            if (evict === null) break;
+            pageCache.delete(evict);
+        }
+    }
+
+    function buildPrefetchTargets() {
+        const pc = pageCount();
+        const set = new Set();
+        const add = (p) => {
+            if (p >= 0 && p < pc) set.add(p);
+        };
+        for (let d = 1; d <= 6; d++) add(currentPage + d);
+        for (let d = 1; d <= 4; d++) add(currentPage - d);
+        add(0);
+        add(1);
+        add(2);
+        add(pc - 1);
+        add(pc - 2);
+        return [...set];
+    }
+
+    let prefetchRunning = false;
+    let prefetchTimer = null;
+
+    function schedulePrefetch() {
+        if (prefetchTimer) return;
+        prefetchTimer = setTimeout(() => {
+            prefetchTimer = null;
+            prefetchPages();
+        }, 900);
+    }
+
+    async function prefetchPages() {
+        if (prefetchRunning) return;
+        prefetchRunning = true;
+        const me = ++prefetchJob;
+        const ctx = currentCtxKey();
+        try {
+            if (ctx !== cacheCtx) return;
+            const targets = buildPrefetchTargets();
+            const query = ($("#searchInput").value || "").trim();
+            const ping = activePingFilters.size ? [...activePingFilters].join(",") : "";
+            for (const p of targets) {
+                if (me !== prefetchJob) return;
+                if (ctx !== cacheCtx) return;
+                if (pageCache.has(p)) continue;
+                if (prefetchRunningThrottled()) break;
+                try {
+                    fetchInFlight++;
+                    let res;
+                    try {
+                        res = JSON.parse(
+                            await api().get_configs(
+                                query,
+                                JSON.stringify({ protocols: [...activeFilters], countries: [...activeCountries] }),
+                                sortState.key,
+                                sortState.dir,
+                                p * PAGE_SIZE,
+                                PAGE_SIZE,
+                                ping
+                            )
+                        );
+                    } finally {
+                        fetchInFlight--;
+                    }
+                    if (me !== prefetchJob || ctx !== cacheCtx) return;
+                    pageCache.set(p, res.configs || []);
+                    trimPageCache();
+                } catch (e) {}
+            }
+        } finally {
+            prefetchRunning = false;
+            if (!prefetchRunningThrottled()) schedulePrefetch();
+        }
+    }
+
+    function prefetchRunningThrottled() {
+        const keys = [...pageCache.keys()];
+        if (keys.length >= 24) return true;
+        const pc = pageCount();
+        if (pc <= 2) return true;
+        return false;
+    }
+
+    function scrollTableBottom() {
+        requestAnimationFrame(() => {
+            const el = wrapScrollEl();
+            el.scrollTop = el.scrollHeight;
+        });
+    }
+
+    function flushNavPending() {
+        if (navPending !== null) {
+            const p = navPending;
+            navPending = null;
+            navigateTo(p.page, p.scroll);
+        } else {
+            renderTable();
+        }
+    }
+
+    function setNavBusy(on) {
+        if (on) {
+            document.body.classList.add("nav-busy");
+        } else {
+            document.body.classList.remove("nav-busy");
+        }
+    }
+
+    function navigateTo(page, scrollBottom = false) {
         hideBusy();
         const pc = pageCount();
-        currentPage = Math.max(0, Math.min(page, pc - 1));
-        loadConfigs(true);
+        const target = Math.max(0, Math.min(page, pc - 1));
+        const ctx = currentCtxKey();
+        const cached = (ctx === cacheCtx) ? pageCache.get(target) : undefined;
+        if (cached) {
+            if (navInFlight) {
+                navPending = { page: target, scroll: scrollBottom };
+                return;
+            }
+            setNavBusy(false);
+            currentPage = target;
+            allConfigs = cached.slice();
+            loadedOffset = target * PAGE_SIZE;
+            if (scrollBottom) scrollTableBottom();
+            renderTable();
+            schedulePrefetch();
+            return;
+        }
+        if (navInFlight) {
+            navPending = { page: target, scroll: scrollBottom };
+            return;
+        }
+        navInFlight = true;
+        navPending = null;
+        currentPage = target;
+        navLoading = true;
+        if (!document.querySelectorAll("#configBody tr").length) {
+            renderLoadingState();
+        } else {
+            setNavBusy(true);
+        }
+        loadConfigs(true)
+            .then(() => {
+                navInFlight = false;
+                navLoading = false;
+                setNavBusy(false);
+                if (scrollBottom) scrollTableBottom();
+                flushNavPending();
+            })
+            .catch(() => {
+                navInFlight = false;
+                navLoading = false;
+                setNavBusy(false);
+                flushNavPending();
+            });
+    }
+
+    function goToPage(page) {
+        navigateTo(page, false);
     }
 
     function goToFirstRow() {
@@ -114,14 +311,7 @@
     }
 
     function goToLastRow() {
-        const pc = pageCount();
-        currentPage = Math.max(0, pc - 1);
-        loadConfigs(true).then(() => {
-            requestAnimationFrame(() => {
-                const el = wrapScrollEl();
-                el.scrollTop = el.scrollHeight;
-            });
-        });
+        navigateTo(Number.MAX_SAFE_INTEGER, true);
     }
 
     function renderWindow(force = true) {
@@ -215,17 +405,23 @@
         try {
             const query = ($("#searchInput").value || "").trim();
             const ping = activePingFilters.size ? [...activePingFilters].join(",") : "";
-            const res = JSON.parse(
-                await api().get_configs(
-                    query,
-                    JSON.stringify({ protocols: [...activeFilters], countries: [...activeCountries] }),
-                    sortState.key,
-                    sortState.dir,
-                    loadedOffset,
-                    PAGE_SIZE,
-                    ping
-                )
-            );
+            fetchInFlight++;
+            let res;
+            try {
+                res = JSON.parse(
+                    await api().get_configs(
+                        query,
+                        JSON.stringify({ protocols: [...activeFilters], countries: [...activeCountries] }),
+                        sortState.key,
+                        sortState.dir,
+                        loadedOffset,
+                        PAGE_SIZE,
+                        ping
+                    )
+                );
+            } finally {
+                fetchInFlight--;
+            }
             if (job !== loadJob) return allConfigs.length;
             const rows = res.configs || [];
             const total = res.total || 0;
@@ -237,9 +433,21 @@
             allConfigs = allConfigs.concat(rows);
             totalConfigs = total;
             loadedOffset = allConfigs.length;
-            if (!silent) renderTable();
+            navLoading = false;
+            const ctx = currentCtxKey();
+            if (ctx !== cacheCtx) {
+                pageCache.clear();
+                cacheCtx = ctx;
+            }
+            pageCache.set(currentPage, rows.slice());
+            trimPageCache();
+            if (!silent) {
+                renderTable();
+                schedulePrefetch();
+            }
             return allConfigs.length;
         } catch (e) {
+            navLoading = false;
             toast("Failed to load configs", "error");
             return allConfigs.length;
         }
@@ -299,6 +507,107 @@
         tbody.innerHTML = `<tr>${cell.repeat(cols)}</tr>`.repeat(rows);
     }
 
+    function renderLoadingState() {
+        const tbody = $("#configBody");
+        if (!tbody) return;
+        const cols = document.querySelectorAll("#configTable thead th").length || 1;
+        tbody.innerHTML = `<tr><td colspan="${cols}" style="height:120px;text-align:center;color:var(--text-muted,#94a3b8)">
+            <div style="display:inline-flex;align-items:center;gap:10px;font-size:13px">
+                <span style="width:16px;height:16px;border:2px solid rgba(99,102,241,.3);border-top-color:#6366f1;border-radius:50%;display:inline-block;animation:spin .7s linear infinite"></span>
+                <span>Loading...</span>
+            </div>
+            <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+        </td></tr>`;
+    }
+
+    function tableRowsList() {
+        return Array.from(document.querySelectorAll("#configBody tr"));
+    }
+
+    function applyRowSelection() {
+        const rows = tableRowsList();
+        rows.forEach((r) => r.classList.remove("row-selected"));
+        if (!rowSelectionActive || rows.length === 0) return;
+        if (selectedRowIndex >= rows.length) selectedRowIndex = rows.length - 1;
+        if (selectedRowIndex < 0) selectedRowIndex = 0;
+        const row = rows[selectedRowIndex];
+        row.classList.add("row-selected");
+        try {
+            row.scrollIntoView({ block: "nearest" });
+        } catch (e) {}
+    }
+
+    function moveRowSelection(delta) {
+        const rows = tableRowsList();
+        if (rows.length === 0) return;
+        rowSelectionActive = true;
+        selectedRowIndex = Math.max(0, Math.min(rows.length - 1, selectedRowIndex + delta));
+        applyRowSelection();
+    }
+
+    function handleTableKeys(e) {
+        if (e.ctrlKey || e.altKey || e.metaKey) return;
+        const t = e.target;
+        if (t) {
+            const tag = t.tagName || "";
+            if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
+        }
+        const overlay = $("#progressOverlay");
+        if (overlay && overlay.style.display === "flex") return;
+        const about = document.getElementById("aboutModal");
+        if (about && about.style.display === "flex") return;
+        const table = $("#configTable");
+        if (!table || table.style.display === "none") return;
+        const total = totalConfigs || 0;
+        switch (e.key) {
+            case "ArrowDown":
+                e.preventDefault();
+                moveRowSelection(1);
+                break;
+            case "ArrowUp":
+                e.preventDefault();
+                moveRowSelection(-1);
+                break;
+            case "PageDown":
+                e.preventDefault();
+                if (total) goToPage(currentPage + 1);
+                break;
+            case "PageUp":
+                e.preventDefault();
+                if (total) goToPage(currentPage - 1);
+                break;
+            case "Home":
+                if (!total) break;
+                e.preventDefault();
+                if (e.shiftKey) {
+                    moveRowSelection(-9999);
+                } else {
+                    goToPage(0);
+                }
+                break;
+            case "End":
+                if (!total) break;
+                e.preventDefault();
+                if (e.shiftKey) {
+                    moveRowSelection(9999);
+                } else {
+                    goToLastRow();
+                }
+                break;
+            case "Enter": {
+                e.preventDefault();
+                const rows = tableRowsList();
+                if (rows.length === 0) break;
+                rowSelectionActive = true;
+                if (selectedRowIndex >= rows.length) selectedRowIndex = rows.length - 1;
+                const row = rows[Math.max(0, selectedRowIndex)];
+                const btn = row && row.querySelector(".detail-btn");
+                if (btn) btn.click();
+                break;
+            }
+        }
+    }
+
     function renderTable() {
         const tbody = $("#configBody");
         const table = $("#configTable");
@@ -337,6 +646,10 @@
         if (displayConfigs.length === 0 && totalConfigs > 0) {
             if (busyOperation) {
                 showBusy(busyOperation);
+                return;
+            }
+            if (navLoading || fetchInFlight > 0) {
+                renderLoadingState();
                 return;
             }
             tbody.innerHTML = `
@@ -984,17 +1297,22 @@
         const ping = activePingFilters.size ? [...activePingFilters].join(",") : "";
         let res;
         try {
-            res = JSON.parse(
-                await api().get_configs(
-                    query,
-                    JSON.stringify({ protocols: [...activeFilters], countries: [...activeCountries] }),
-                    sortState.key,
-                    sortState.dir,
-                    currentPage * PAGE_SIZE,
-                    PAGE_SIZE,
-                    ping
-                )
-            );
+            fetchInFlight++;
+            try {
+                res = JSON.parse(
+                    await api().get_configs(
+                        query,
+                        JSON.stringify({ protocols: [...activeFilters], countries: [...activeCountries] }),
+                        sortState.key,
+                        sortState.dir,
+                        currentPage * PAGE_SIZE,
+                        PAGE_SIZE,
+                        ping
+                    )
+                );
+            } finally {
+                fetchInFlight--;
+            }
         } catch (e) {
             return;
         }
@@ -1981,6 +2299,8 @@ await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
                 handleDetails();
             }
         });
+
+        document.addEventListener("keydown", handleTableKeys);
 
         document.getElementById("aboutClose").addEventListener("click", () => {
             document.getElementById("aboutModal").style.display = "none";

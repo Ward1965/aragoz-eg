@@ -285,7 +285,7 @@ class JSApi:
         cancel_check=None,
         batch_size: int = 8,
         raw: bool = False,
-        timeout: int = 90,
+        timeout: int = 45,
         concurrency: int = 96,
     ):
         errors: List[str] = []
@@ -304,7 +304,7 @@ class JSApi:
                     if is_dead_link(url):
                         self._dead_skipped += 1
                         return None
-                    resp = await fetch_with_retry(url, session, raw=raw, timeout=timeout, retries=2)
+                    resp = await fetch_with_retry(url, session, raw=raw, timeout=timeout, retries=1)
                     if resp[2] and not resp[1] and _is_permanent_error(resp[2]):
                         mark_dead_link(url)
                     return resp
@@ -608,10 +608,10 @@ class JSApi:
             if main_w:
                 main_w.show()
                 main_w.maximize()
-            welcome_w = getattr(self, "_welcome_window", None)
-            if welcome_w:
+            ww = getattr(self, "_welcome_window", None)
+            if ww:
                 try:
-                    welcome_w.destroy()
+                    ww.destroy()
                 except Exception:
                     pass
             return json.dumps({"success": True})

@@ -510,6 +510,23 @@ td.row-number {
     background: var(--bg-tertiary);
 }
 
+body.nav-busy #configBody {
+    opacity: 0.45;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+body.nav-busy #pageIndicator::after {
+    content: " \2026";
+    opacity: 0.7;
+}
+tbody tr.row-selected {
+    background: rgba(99, 102, 241, 0.10);
+    box-shadow: inset 3px 0 0 #6366f1;
+}
+tbody tr.row-selected:hover {
+    background: rgba(99, 102, 241, 0.16);
+}
+
 .export-row {
     display: flex;
     gap: 6px;

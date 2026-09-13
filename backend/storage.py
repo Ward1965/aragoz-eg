@@ -39,7 +39,7 @@ def is_expired(expires_at) -> bool:
     return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" < datetime.date.today().isoformat()
 
 
-# الحد الأقصى لعمر الكونفيغ/الملف: أي كونفيغ مخزّن منذ أكثر من شهر يُستبعد
+# الحد الأقصى لعمر الكونفيغ/الملف: أي كونفيغ أقدم من شهر يُستبعد من النتائج فقط (لا يُحذف)
 MAX_AGE_DAYS = 30
 
 
@@ -81,6 +81,18 @@ def _get_conn():
     return conn
 
 
+def _reset_db_file():
+    """حذف ملف قاعدة البيانات مع كل تشغيل حتى تُنشأ من جديد فارغة."""
+    for suffix in ("", "-wal", "-shm"):
+        p = DB_PATH + suffix
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+                log.info("Removed %s (fresh database per launch)", p)
+        except Exception as e:
+            log.warning("Failed to remove %s: %s", p, e)
+
+
 def init_db():
     global _DB_INITIALIZED
     with _db_lock:
@@ -89,6 +101,7 @@ def init_db():
 
     conn = None
     try:
+        _reset_db_file()
         conn = _get_conn()
         conn.execute("""
             CREATE TABLE IF NOT EXISTS configs (
@@ -144,18 +157,6 @@ def init_db():
                 log.info("Removed %d expired configs on startup", deleted)
         except Exception as e:
             log.warning("Expired config cleanup failed: %s", e)
-
-        try:
-            cutoff = (datetime.date.today() - datetime.timedelta(days=MAX_AGE_DAYS)).isoformat()
-            deleted = conn.execute(
-                "DELETE FROM configs WHERE created_at IS NOT NULL AND created_at != '' "
-                "AND created_at LIKE '____-__-__%' AND created_at < ?",
-                (cutoff,),
-            ).rowcount
-            if deleted:
-                log.info("Removed %d configs older than %d days on startup", deleted, MAX_AGE_DAYS)
-        except Exception as e:
-            log.warning("Old config cleanup failed: %s", e)
 
         conn.commit()
         _DB_INITIALIZED = True
