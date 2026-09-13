@@ -143,7 +143,7 @@ class JSApi:
             elif task_name == "fetch_telegram":
                 result = self.fetch_telegram_sync(urls_text)
             elif task_name == "ping_all":
-                result = self.ping_all_sync()
+                result = self.ping_all_sync(urls_text)
             else:
                 result = json.dumps({"error": f"Unknown task: {task_name}"})
             with self._bg_lock:
@@ -602,6 +602,32 @@ class JSApi:
         self._set_progress("done", 0, 0, "")
         return result
 
+    def start_app(self) -> str:
+        try:
+            main_w = getattr(self, "_main_window", None)
+            if main_w:
+                main_w.show()
+                main_w.maximize()
+            welcome_w = getattr(self, "_welcome_window", None)
+            if welcome_w:
+                try:
+                    welcome_w.destroy()
+                except Exception:
+                    pass
+            return json.dumps({"success": True})
+        except Exception as e:
+            log.warning("start_app failed: %s", e)
+            return json.dumps({"success": False, "error": str(e)})
+
+    def maximize_window(self) -> str:
+        try:
+            if self._window:
+                self._window.maximize()
+            return json.dumps({"success": True})
+        except Exception as e:
+            log.warning("Failed to maximize window: %s", e)
+            return json.dumps({"success": False, "error": str(e)})
+
     def import_from_file(self, filepath: str = "") -> str:
         import webview as wv
 
@@ -1024,14 +1050,33 @@ class JSApi:
             results = dict(ex.map(_test, id_list))
         return json.dumps(results)
 
-    def ping_all_sync(self) -> str:
+    def ping_all_sync(self, scope_json: str = "") -> str:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         from .storage import get_all_configs
 
         def key_of(s, p):
             return f"{s}:{p}"
 
-        rows = get_all_configs()
+        # نطاق مخصص: فحص القائمة الحالية بحسب الفلاتر/البحث (بدلاً من القاعدة كلها)
+        scope = {}
+        if scope_json:
+            try:
+                scope = json.loads(scope_json) or {}
+            except Exception as e:
+                scope = {}
+                log.warning("ping_all: bad scope json: %s", e)
+        if scope:
+            rows, _ = search_configs(
+                query=scope.get("query", "") or "",
+                protocols=scope.get("protocols") or None,
+                sort_key="",
+                sort_dir=1,
+                offset=0,
+                limit=2_000_000,
+                countries=scope.get("countries") or None,
+            )
+        else:
+            rows = get_all_configs()
         weights = {}
         unique = {}
         for cfg in rows:

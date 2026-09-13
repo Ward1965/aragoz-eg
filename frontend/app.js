@@ -672,7 +672,7 @@
     async function handlePingAll() {
         const btn = $("#pingAllBtn");
         if (pingAllRunning) {
-            showProgress("⚡", "Pinging all configs", "Pinging...");
+            showProgress("⚡", "Pinging filtered configs", "Pinging...");
             return;
         }
         requestTask("ping", () => handlePingAllStart());
@@ -684,9 +684,15 @@
         pingAllCancelled = false;
         pingAppliedSince = 0;
         pingLastRender = 0;
-        showProgress("⚡", "Pinging all configs", "Preparing...");
+        showProgress("⚡", "Pinging filtered configs", "Preparing...");
         try {
-            await api().start_bg("ping_all", "");
+            const query = ($("#searchInput").value || "").trim();
+            const scope = JSON.stringify({
+                query,
+                protocols: [...activeFilters],
+                countries: [...activeCountries],
+            });
+            await api().start_bg("ping_all", scope);
         } catch (e) {
             pingAllRunning = false;
             updatePingAllBtnState();
@@ -737,7 +743,8 @@
                         pingAppliedSince = batch.since;
                     }
                 } catch (e) {}
-                        if (now - pingLastRender > 500) {
+                const now = Date.now();
+                if (now - pingLastRender > 500) {
                     pingLastRender = now;
                     renderTable();
                     schedulePingFilterRefresh();
@@ -1734,12 +1741,19 @@ await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
         $("#scanWebBtn").addEventListener("click", handleScanWeb);
         $("#tgFetchBtn").addEventListener("click", handleFetchTelegram);
         $("#importFileBtn").addEventListener("click", handleImportFile);
+        $("#fetchToggleBtn").addEventListener("click", () => {
+            const wrap = $("#fetchWrap");
+            const vis = wrap.style.display === "none";
+            wrap.style.display = vis ? "block" : "none";
+            if (vis) $("#urlInput")?.focus();
+        });
         $("#importRawBtn").addEventListener("click", () => {
             const ta = $("#rawTextInput");
             const row = $("#rawSubmitRow");
             const vis = ta.style.display === "none";
             ta.style.display = vis ? "block" : "none";
             row.style.display = vis ? "block" : "none";
+            if (vis) ta.focus();
         });
         $("#rawSubmitBtn").addEventListener("click", handleRawImport);
         $("#exportTextBtn").addEventListener("click", handleCopyText);
@@ -1915,7 +1929,7 @@ await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
         $("#welcomeClose").addEventListener("click", closeWelcome);
 
         $("#aboutBtn").addEventListener("click", () => {
-            document.getElementById("aboutModal").style.display = "flex";
+            showWelcome();
         });
 
         window.addEventListener("resize", () => { recalcPageSize(); });
@@ -2012,7 +2026,10 @@ await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
     function closeWelcome() {
         const ov = $("#welcomeOverlay");
         ov.classList.remove("visible");
-        setTimeout(() => (ov.style.display = "none"), 260);
+        setTimeout(() => {
+            ov.style.display = "none";
+            api().maximize_window();
+        }, 260);
     }
 
     function showWelcome() {
@@ -2056,7 +2073,6 @@ await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
 
     waitForApi(() => {
         initEvents();
-        showWelcome();
         loadConfigs();
         renderFilters();
         loadPingResults();

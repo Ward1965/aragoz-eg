@@ -90,6 +90,12 @@ body {
     margin-bottom: 20px;
 }
 
+.sidebar-divider {
+    height: 1px;
+    background: var(--sidebar-border);
+    margin: 12px 0;
+}
+
 .sidebar-section h3 {
     font-size: 12px;
     text-transform: uppercase;
@@ -178,6 +184,46 @@ body.dark .btn-scan {
     color: #fff;
 }
 .btn-danger:hover { background: var(--danger-hover); }
+
+#pingAllBtn {
+    background: #0088cc;
+    color: #f5fbff;
+    font-weight: 400;
+}
+#pingAllBtn:hover {
+    background: #0076b3;
+    color: #ffffff;
+    opacity: 1;
+}
+body.dark #pingAllBtn {
+    background: #0088cc;
+    color: #f5fbff;
+}
+
+#tgFetchBtn {
+    background: #0088cc;
+    color: #fff;
+}
+#tgFetchBtn:hover {
+    background: #0076b3;
+    opacity: 1;
+}
+
+#scanWebBtn,
+#scanWebBtn.btn-scan {
+    background: #cc0000;
+    color: #fff;
+    font-weight: 400;
+    box-shadow: none;
+}
+#scanWebBtn:hover,
+#scanWebBtn.btn-scan:hover {
+    background: #b30000;
+}
+body.dark #scanWebBtn.btn-scan {
+    background: #cc0000;
+    box-shadow: none;
+}
 
 .btn-full { width: 100%; }
 

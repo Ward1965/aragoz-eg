@@ -21,45 +21,47 @@
             </div>
 
             <div class="sidebar-section">
-                <h3>Sources</h3>
-                <div class="url-input-wrap">
-                    <textarea id="urlInput" placeholder="Enter subscription URLs — one http/https link per line." rows="4"></textarea>
-                    <small class="url-hint">Only subscription links (http/https). NOT config lines like vmess:// — use <em>Import/Paste</em> for those.</small>
-                </div>
+                <h3>Scan</h3>
                 <div class="btn-stack">
-                    <button id="fetchBtn" class="btn btn-primary btn-full btn-icon" title="Fetch configs from the URLs above — disabled while Sources is empty">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 17 18z"/><path d="M10 14l2 2 2-2M12 11v5"/></svg>Fetch
-                    </button>
-                    <button id="importFileBtn" class="btn btn-secondary btn-full btn-icon" title="Import configs from a file">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 16v-5M9.5 13.5 12 11l2.5 2.5"/></svg>Import File
-                    </button>
                     <button id="scanWebBtn" class="btn btn-scan btn-full btn-icon" title="Search the web and load proxies automatically">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.7 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.7-3.8-9S9.5 5.6 12 3z"/></svg>Scan Web (Auto)
                     </button>
                     <label class="ping-on-search"><input type="checkbox" id="scanWebPingCb"> Ping each new row</label>
-                    <button id="tgFetchBtn" class="btn btn-secondary btn-full btn-icon" title="Fetch configs from Telegram channels (157 built-in channels, or ones you type in Sources)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>Fetch from Telegram
+                    <button id="tgFetchBtn" class="btn btn-secondary btn-full btn-icon" title="Scan Telegram channels for configs (157 built-in channels, or ones you type in the URL box)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg>Scan Telegram
                     </button>
                     <label class="ping-on-search"><input type="checkbox" id="tgPingCb"> Ping each new row</label>
                 </div>
-                <div id="discoveredBox" style="display:none;margin-top:8px">
-                    <h3>Discovered Sources</h3>
-                    <div id="discoveredList"></div>
-                </div>
-            </div>
-
-            <div class="sidebar-section">
-                <h3>Manual</h3>
+                <div class="sidebar-divider"></div>
                 <div class="btn-stack">
                     <button id="importRawBtn" class="btn btn-secondary btn-full btn-icon" title="Paste raw configs manually">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="16" rx="2"/><path d="M9 4.5A2.5 2.5 0 0 1 11.5 2h1A2.5 2.5 0 0 1 15 4.5V6H9z"/></svg>Import Raw Text
                     </button>
+                    <button id="fetchToggleBtn" class="btn btn-secondary btn-full btn-icon" title="Enter subscription URLs and fetch them">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 17 18z"/><path d="M10 14l2 2 2-2M12 11v5"/></svg>Fetch Urls
+                    </button>
                 </div>
-                <textarea id="rawTextInput" placeholder="Or paste raw configs here..." rows="3" style="display:none;margin-top:6px"></textarea>
+                <div id="fetchWrap" style="display:none;margin-top:6px">
+                    <div class="url-input-wrap">
+                        <textarea id="urlInput" placeholder="Enter subscription URLs — one http/https link per line." rows="4"></textarea>
+                        <small class="url-hint">Only subscription links (http/https). NOT config lines like vmess:// — use <em>Import Raw Text</em> for those.</small>
+                    </div>
+                    <button id="fetchBtn" class="btn btn-primary btn-full btn-icon" title="Fetch configs from the URLs above — disabled while the URL box is empty">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.5A3.5 3.5 0 0 1 17 18z"/><path d="M10 14l2 2 2-2M12 11v5"/></svg>Fetch
+                    </button>
+                </div>
+                <textarea id="rawTextInput" placeholder="Paste raw configs here..." rows="3" style="display:none;margin-top:6px"></textarea>
                 <div id="rawSubmitRow" style="display:none;margin-top:4px">
                     <button id="rawSubmitBtn" class="btn btn-primary btn-full btn-icon" title="Parse and load the pasted configs">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 11 18-8-8 18-2-7z"/><path d="M13 11 21 3"/></svg>Submit Raw
                     </button>
+                </div>
+                <button id="importFileBtn" class="btn btn-secondary btn-full btn-icon" title="Import configs from a file" style="margin-top:6px">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 16v-5M9.5 13.5 12 11l2.5 2.5"/></svg>Import File
+                </button>
+                <div id="discoveredBox" style="display:none;margin-top:8px">
+                    <h3>Discovered Sources</h3>
+                    <div id="discoveredList"></div>
                 </div>
             </div>
 
