@@ -78,6 +78,7 @@ class JSApi:
         self._dead_skipped = 0
         self._bg_result = None
         self._bg_error = None
+        self._discovered: List[str] = []
         self._bg_lock = threading.Lock()
         self._ping_build = {"done": 0, "total": 0, "results": []}
         self._ping_map: Dict[str, int] = {}
@@ -96,6 +97,7 @@ class JSApi:
     def _reset_cancel(self):
         self._cancelled = False
         self._dead_skipped = 0
+        self._discovered = []
 
     def cancel(self) -> str:
         self._cancelled = True
@@ -162,13 +164,23 @@ class JSApi:
                 return self._bg_result
         return json.dumps({"status": "running"})
 
+    def get_discovered(self) -> str:
+        try:
+            return json.dumps({"discovered": list(self._discovered)})
+        except Exception:
+            return json.dumps({"discovered": []})
+
     def auto_fetch_sync(self) -> str:
-        from .scraper import discover_all_urls
+        from .scraper import discover_all_urls, _load_good_sources, KNOWN_SOURCES
+
+        self._discovered = list(_load_good_sources()) + list(KNOWN_SOURCES)
 
         def disc_progress(stage, current, total, detail=""):
             self._set_progress(stage, current, total, detail)
 
         urls = self._run_async(discover_all_urls(disc_progress, cancel_check=lambda: self._cancelled), timeout=300)
+        if urls:
+            self._discovered = list(urls)
         if not urls:
             self._set_progress("done", 0, 0, "")
             log.warning("No sources auto-discovered")
@@ -580,14 +592,17 @@ class JSApi:
         return json.dumps({"urls": urls, "total": len(urls)})
 
     def auto_fetch(self) -> str:
-        from .scraper import discover_all_urls
+        from .scraper import discover_all_urls, _load_good_sources, KNOWN_SOURCES
 
         self._reset_cancel()
+        self._discovered = list(_load_good_sources()) + list(KNOWN_SOURCES)
 
         def disc_progress(stage, current, total, detail=""):
             self._set_progress(stage, current, total, detail)
 
         urls = self._run_async(discover_all_urls(disc_progress, cancel_check=lambda: self._cancelled), timeout=300)
+        if urls:
+            self._discovered = list(urls)
         if not urls:
             self._set_progress("done", 0, 0, "")
             log.warning("No sources auto-discovered")

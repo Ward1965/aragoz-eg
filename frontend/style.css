@@ -1033,6 +1033,19 @@ body.dark .busy-overlay {
     font-size: 11px;
 }
 
+.discovered-row {
+    display: flex;
+    gap: 6px;
+}
+.discovered-row #discoveredToggleBtn { flex: 1; }
+#discoveredCopyBtn {
+    flex: none;
+    width: 38px;
+    justify-content: center;
+}
+#discoveredCopyBtn svg { width: 15px; height: 15px; }
+#discoveredCopyBtn:hover svg { color: var(--text); }
+
 .discovered-item {
     padding: 2px 4px;
     border-radius: 4px;
@@ -1041,8 +1054,30 @@ body.dark .busy-overlay {
     word-break: break-all;
     color: var(--text-muted);
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 .discovered-item:hover { background: var(--bg-tertiary); color: var(--text); }
+.discovered-item-text { flex: 1; }
+.discovered-item-copy {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0.6;
+}
+.discovered-item:hover .discovered-item-copy { opacity: 1; }
+.discovered-item-copy:hover { background: var(--bg-tertiary); color: var(--text); }
+.discovered-item-copy svg { width: 11px; height: 11px; }
 
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

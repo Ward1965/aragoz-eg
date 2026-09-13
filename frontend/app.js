@@ -57,6 +57,8 @@
     let searchStartTime = 0;
     let searchTimerId = null;
     let PAGE_SIZE = 20;
+    let recalcTimer = null;
+    let psPendingVal = 0;
 
     function recalcPageSize() {
         const wrapper = document.querySelector(".table-wrapper");
@@ -64,7 +66,31 @@
         let rowH = 0;
         try { rowH = document.querySelector("#configBody tr").offsetHeight; } catch (e) {}
         if (!rowH || rowH < 10) rowH = 41;
-        PAGE_SIZE = Math.max(10, Math.floor(visH / rowH));
+        const next = Math.max(10, Math.floor(visH / rowH));
+        if (next === PAGE_SIZE) return;
+        psPendingVal = next;
+        if (recalcTimer) clearTimeout(recalcTimer);
+        recalcTimer = setTimeout(() => applyPsChange(), 250);
+    }
+
+    function applyPsChange() {
+        recalcTimer = null;
+        const next = psPendingVal;
+        if (!next || next === PAGE_SIZE) return;
+        if (navLoading || navInFlight || fetchInFlight > 0 || busyOperation) {
+            recalcTimer = setTimeout(() => applyPsChange(), 500);
+            return;
+        }
+        pageCache.clear();
+        PAGE_SIZE = next;
+        psPendingVal = 0;
+        updatePagination();
+        if (!tableRowsList().length) return;
+        navigateTo(currentPage);
+    }
+
+    function maybeSettlePs() {
+        if (psPendingVal && psPendingVal !== PAGE_SIZE) applyPsChange();
     }
 
     function wrapScrollEl() {
@@ -242,6 +268,7 @@
             navigateTo(p.page, p.scroll);
         } else {
             renderTable();
+            maybeSettlePs();
         }
     }
 
@@ -259,7 +286,7 @@
         const target = Math.max(0, Math.min(page, pc - 1));
         const ctx = currentCtxKey();
         const cached = (ctx === cacheCtx) ? pageCache.get(target) : undefined;
-        if (cached) {
+        if (cached && (cached.length > 0 || totalConfigs === 0)) {
             if (navInFlight) {
                 navPending = { page: target, scroll: scrollBottom };
                 return;
@@ -271,6 +298,7 @@
             if (scrollBottom) scrollTableBottom();
             renderTable();
             schedulePrefetch();
+            maybeSettlePs();
             return;
         }
         if (navInFlight) {
@@ -281,11 +309,7 @@
         navPending = null;
         currentPage = target;
         navLoading = true;
-        if (!document.querySelectorAll("#configBody tr").length) {
-            renderLoadingState();
-        } else {
-            setNavBusy(true);
-        }
+        setNavBusy(true);
         loadConfigs(true)
             .then(() => {
                 navInFlight = false;
@@ -293,6 +317,7 @@
                 setNavBusy(false);
                 if (scrollBottom) scrollTableBottom();
                 flushNavPending();
+                maybeSettlePs();
             })
             .catch(() => {
                 navInFlight = false;
@@ -439,7 +464,9 @@
                 pageCache.clear();
                 cacheCtx = ctx;
             }
-            pageCache.set(currentPage, rows.slice());
+            if (rows.length > 0 || total <= 0) {
+                pageCache.set(currentPage, rows.slice());
+            }
             trimPageCache();
             if (!silent) {
                 renderTable();
@@ -505,19 +532,6 @@
         const rows = Math.max(1, Math.min(PAGE_SIZE || 20, 30));
         const cell = "<td>&nbsp;</td>";
         tbody.innerHTML = `<tr>${cell.repeat(cols)}</tr>`.repeat(rows);
-    }
-
-    function renderLoadingState() {
-        const tbody = $("#configBody");
-        if (!tbody) return;
-        const cols = document.querySelectorAll("#configTable thead th").length || 1;
-        tbody.innerHTML = `<tr><td colspan="${cols}" style="height:120px;text-align:center;color:var(--text-muted,#94a3b8)">
-            <div style="display:inline-flex;align-items:center;gap:10px;font-size:13px">
-                <span style="width:16px;height:16px;border:2px solid rgba(99,102,241,.3);border-top-color:#6366f1;border-radius:50%;display:inline-block;animation:spin .7s linear infinite"></span>
-                <span>Loading...</span>
-            </div>
-            <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
-        </td></tr>`;
     }
 
     function tableRowsList() {
@@ -649,7 +663,6 @@
                 return;
             }
             if (navLoading || fetchInFlight > 0) {
-                renderLoadingState();
                 return;
             }
             tbody.innerHTML = `
@@ -1343,6 +1356,10 @@
         } else {
             allConfigs = rows;
         }
+        if (rows.length > 0 || total <= 0) {
+            pageCache.set(page, rows.slice());
+            trimPageCache();
+        }
     }
 
     function scheduleLiveRefresh() {
@@ -1505,6 +1522,9 @@
     function escAttr(s) {
         return (s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
+
+    const copySvg =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 
     const COUNTRY_FLAGS = {
         "United States": "US", "US": "US", "USA": "US", "U.S.A": "US",
@@ -1756,11 +1776,26 @@ await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
     function showDiscovered(urls) {
         const box = $("#discoveredBox");
         const list = $("#discoveredList");
-        box.style.display = "block";
         list.innerHTML = urls
-            .map((u) => `<div class="discovered-item" data-url="${escAttr(u)}">${esc(u)}</div>`)
+            .map(
+                (u) =>
+                    `<div class="discovered-item" data-url="${escAttr(u)}"><span class="discovered-item-text">${esc(u)}</span><button class="discovered-item-copy" title="Copy this source">${copySvg}</button></div>`
+            )
             .join("");
+        list.style.display = "none";
+        $("#discoveredToggleLabel").textContent = `Discovered Sources (${urls.length})`;
+        $("#discoveredToggleArrow").textContent = "▸";
+        box.style.display = "block";
         $("#discoveredBox").dataset.count = urls.length;
+    }
+
+    function toggleDiscoveredList() {
+        const list = $("#discoveredList");
+        const arrow = $("#discoveredToggleArrow");
+        if (!list) return;
+        const open = list.style.display !== "none";
+        list.style.display = open ? "none" : "block";
+        arrow.textContent = open ? "▸" : "▾";
     }
 
     async function handleImportFile() {
@@ -2252,7 +2287,35 @@ await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
 
         window.addEventListener("resize", () => { recalcPageSize(); });
 
-        $("#discoveredList").addEventListener("click", (e) => {
+        $("#discoveredToggleBtn").addEventListener("click", (e) => {
+            e.stopPropagation();
+            toggleDiscoveredList();
+        });
+
+        $("#discoveredCopyBtn").addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const items = Array.from(document.querySelectorAll(".discovered-item"));
+            try {
+                await navigator.clipboard.writeText(items.map((el) => el.dataset.url).join("\n"));
+                toast("Copied " + items.length + " sources", "success");
+            } catch (err) {
+                toast("Copy failed: " + err.message, "error");
+            }
+        });
+
+        $("#discoveredList").addEventListener("click", async (e) => {
+            const copyBtn = e.target.closest(".discovered-item-copy");
+            if (copyBtn) {
+                const item = copyBtn.closest(".discovered-item");
+                const url = item.dataset.url;
+                try {
+                    await navigator.clipboard.writeText(url);
+                    toast("Copied source", "success");
+                } catch (err) {
+                    toast("Copy failed: " + err.message, "error");
+                }
+                return;
+            }
             const item = e.target.closest(".discovered-item");
             if (!item) return;
             const url = item.dataset.url;
@@ -2310,6 +2373,30 @@ await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
         });
     }
 
+    async function finalizeAfterCancel() {
+        try {
+            const d = JSON.parse(await api().get_discovered());
+            if (d && d.discovered && d.discovered.length > 0) {
+                showDiscovered(d.discovered);
+            }
+        } catch (e) {}
+        for (let i = 0; i < 50; i++) {
+            await new Promise((r) => setTimeout(r, 400));
+            try {
+                const result = JSON.parse(await api().get_bg_result());
+                if (result.error) {
+                    toast("Scan failed: " + result.error, "error");
+                    return;
+                }
+                if (result.status === "running") continue;
+                applyFetchResult(result);
+                return;
+            } catch (e) {
+                return;
+            }
+        }
+    }
+
     function handleCancelScan() {
         currentTask = null;
         const wasPing = pingAllRunning;
@@ -2330,6 +2417,7 @@ await api().start_bg("auto_fetch", "", $("#scanWebPingCb").checked ? 1 : 0);
                     resetPingUiState();
                 } else {
                     clearPingResults();
+                    finalizeAfterCancel();
                 }
             })
             .catch(() => {

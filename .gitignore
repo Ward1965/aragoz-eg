@@ -16,6 +16,10 @@ build/
 dist/
 __pycache__/
 *.pyc
+.splash_baked.png
+
+# سكربتات تطوير/اختبار محلية
+_*.py
 
 # مستودع طرف ثالث مضمّن
 --clash-verge-rev-dev/
