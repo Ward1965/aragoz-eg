@@ -498,7 +498,7 @@
     function buildRowsHtml(configs, baseIndex = 0) {
         return configs
             .map((c, i) => {
-                const key = (c.server || "") + ":" + (c.port || 0);
+                const key = ((c.server || "").trim()) + ":" + (c.port || 0);
                 const saved = latencyResults.get(key);
                 const badgeHtml = saved
                     ? `<span class="latency-badge ${latencyClass(saved.ms)}" data-server="${escAttr(c.server)}" data-port="${c.port}" data-id="${c.id}">${latencyLabel(saved.ms, saved.error)}</span>`
@@ -692,7 +692,7 @@
     let filterJobSeq = 0;
 
     function latencyOf(c) {
-        const r = latencyResults.get((c.server || "") + ":" + (c.port || 0));
+        const r = latencyResults.get(((c.server || "").trim()) + ":" + (c.port || 0));
         return r ? r.ms : Number.NaN;
     }
     function pingCategoryOf(c) {
@@ -856,7 +856,7 @@
     }
 
     function saveLatency(server, port, res) {
-        const key = (server || "") + ":" + (port || 0);
+        const key = ((server || "").trim()) + ":" + (port || 0);
         latencyResults.set(key, res);
         const sel = `.latency-badge[data-server="${CSS.escape(server || "")}"][data-port="${port || 0}"]`;
         document.querySelectorAll(sel).forEach((b) => applyLatencyBadge(b, res));
@@ -1028,7 +1028,7 @@
         }
         renderPingFilters();
         document.querySelectorAll(".latency-badge:not(:empty)").forEach((b) => {
-            if (!latencyResults.has(b.dataset.server + ":" + b.dataset.port)) b.textContent = "?";
+            if (!latencyResults.has(((b.dataset.server || "").trim()) + ":" + b.dataset.port)) b.textContent = "?";
         });
         startPingPoller(btn);
     }
@@ -1274,7 +1274,7 @@
     }
 
     function latencyKey(c) {
-        const r = latencyResults.get((c.server || "") + ":" + (c.port || 0));
+        const r = latencyResults.get(((c.server || "").trim()) + ":" + (c.port || 0));
         return r && typeof r.ms === "number" ? r.ms : -1;
     }
 

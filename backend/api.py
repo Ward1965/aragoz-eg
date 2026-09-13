@@ -406,10 +406,10 @@ class JSApi:
             ex.shutdown(wait=False, cancel_futures=True)
         log.debug("Pinged-on-insert: %d rows", len(targets))
         try:
-            from .storage import save_ping_cache
-            save_ping_cache(self._ping_map)
+            from .storage import update_ping_ms
+            update_ping_ms(self._ping_map)
         except Exception as e:
-            log.warning("Failed to persist ping cache: %s", e)
+            log.warning("Failed to persist ping results: %s", e)
 
     def _is_plausible_subscription(self, url: str) -> bool:
         try:
@@ -811,6 +811,7 @@ class JSApi:
         protocols, countries = _parse_filters(filters)
         limit = max(1, min(int(limit), 4000))
         offset = max(0, int(offset))
+        cats = {x for x in str(ping).split(",") if x} if ping else None
         rows, total = search_configs(
             query,
             protocols,
@@ -819,32 +820,8 @@ class JSApi:
             offset,
             limit,
             countries,
+            cats,
         )
-        if ping:
-            cats = {x for x in str(ping).split(",") if x}
-            if cats:
-                def _cat(key):
-                    ms = self._ping_map.get(key)
-                    if ms is None:
-                        return "untested"
-                    if ms < 0:
-                        return "dead"
-                    if ms < 150:
-                        return "fast"
-                    if ms < 300:
-                        return "mid"
-                    return "slow"
-                all_rows, _ = search_configs(
-                    query, protocols, sort_key,
-                    int(sort_dir if str(sort_dir).lstrip("-").isdigit() else 1),
-                    0, 200000, countries,
-                )
-                filtered = [
-                    r for r in all_rows
-                    if _cat(f"{(r.get('server') or '').strip()}:{int(r.get('port') or 0)}") in cats
-                ]
-                total = len(filtered)
-                rows = filtered[offset: offset + limit]
         self._configs = rows
         return json.dumps({"configs": self._to_frontend(rows), "total": total})
 
@@ -881,7 +858,7 @@ class JSApi:
     ) -> str:
         """Delete only the rows matching the current filters/search/ping (not everything)."""
         protocols, countries = _parse_filters(filters)
-        cats = {x for x in str(ping).split(",") if x}
+        cats = {x for x in str(ping).split(",") if x} if ping else None
         if cats:
             all_rows, _ = search_configs(
                 query,
@@ -889,27 +866,11 @@ class JSApi:
                 "",
                 1,
                 0,
-                200000,
+                0,
                 countries,
+                cats,
             )
-
-            def _cat(key):
-                ms = self._ping_map.get(key)
-                if ms is None:
-                    return "untested"
-                if ms < 0:
-                    return "dead"
-                if ms < 150:
-                    return "fast"
-                if ms < 300:
-                    return "mid"
-                return "slow"
-
-            ids = [
-                r.get("id")
-                for r in all_rows
-                if _cat(f"{(r.get('server') or '').strip()}:{int(r.get('port') or 0)}") in cats
-            ]
+            ids = [r.get("id") for r in all_rows]
             deleted = delete_configs_by_ids([i for i in ids if i is not None])
         else:
             deleted = delete_configs_matching(query, protocols, countries)
@@ -1021,19 +982,31 @@ class JSApi:
         return json.dumps({"total": get_total_configs(), "items": items})
 
     def test_latency(self, server: str, port: int) -> str:
+        host = (server or "").strip()
+        key = f"{host}:{int(port)}"
         try:
             start = time.time()
-            sock = socket.create_connection((server, int(port)), timeout=3)
+            sock = socket.create_connection((host, int(port)), timeout=3)
             sock.close()
             ms = round((time.time() - start) * 1000)
-            self._ping_map[f"{server}:{int(port)}"] = ms
+            self._ping_map[key] = ms
+            self._persist_ping({key: ms})
             return json.dumps({"ms": ms, "ok": True})
         except socket.timeout:
-            self._ping_map[f"{server}:{int(port)}"] = -1
+            self._ping_map[key] = -1
+            self._persist_ping({key: -1})
             return json.dumps({"ms": -1, "ok": False, "error": "timeout"})
         except OSError as e:
-            self._ping_map[f"{server}:{int(port)}"] = -1
+            self._ping_map[key] = -1
+            self._persist_ping({key: -1})
             return json.dumps({"ms": -1, "ok": False, "error": str(e)})
+
+    def _persist_ping(self, entries: Dict[str, int]):
+        try:
+            from .storage import update_ping_ms
+            update_ping_ms(entries)
+        except Exception as e:
+            log.warning("Failed to persist ping result: %s", e)
 
     def test_latency_batch(self, ids: str = "") -> str:
         from concurrent.futures import ThreadPoolExecutor
@@ -1046,7 +1019,7 @@ class JSApi:
             cfg = get_config_by_id(cid)
             if not cfg:
                 return cid, {"ms": -1, "ok": False, "error": "not found"}
-            server = cfg.get("server", "")
+            server = cfg.get("server", "").strip()
             port = int(cfg.get("port", 0) or 0)
             if not server or port <= 0:
                 return cid, {"ms": -1, "ok": False, "error": "no server"}
@@ -1125,8 +1098,9 @@ class JSApi:
             except Exception:
                 return key_of(server, port), {"ms": -1, "ok": False, "error": "invalid"}
 
-        workers = min(total, 800)
+        workers = min(len(targets), 800)
         done = 0
+        updates: Dict[str, int] = {}
         ex = ThreadPoolExecutor(max_workers=workers)
         try:
             futures = [ex.submit(_test, t) for t in targets]
@@ -1135,28 +1109,31 @@ class JSApi:
                     log.info("ping_all cancelled at %d/%d", done, total)
                     ex.shutdown(wait=False, cancel_futures=True)
                     self._ping_build["done"] = done
+                    self._persist_ping(updates)
                     self._set_progress("cancelled", done, total, "")
                     return json.dumps({"done": done, "total": total, "cancelled": True})
                 key, res = fut.result()
                 self._ping_build["results"].append({"key": key, "ms": res.get("ms", -1), "ok": res.get("ok", False), "error": res.get("error", "")})
                 self._ping_map[key] = res.get("ms", -1)
+                updates[key] = res.get("ms", -1)
                 done += weights.get(key, 1)
                 self._ping_build["done"] = done
                 if done % 500 == 0 or done >= total:
+                    if updates:
+                        self._persist_ping(updates)
+                        updates = {}
                     log.info("ping_all progress %d/%d", done, total)
                     self._set_progress("pinging", done, total, f"Tested {done}/{total}")
         except Exception as e:
             log.error("ping_all error: %s", e, exc_info=True)
             ex.shutdown(wait=False, cancel_futures=True)
+            self._persist_ping(updates)
             raise
         ex.shutdown(wait=False)
+        if updates:
+            self._persist_ping(updates)
         log.info("ping_all finished %d/%d", done, total)
         self._set_progress("ping_done", total, total, "")
-        try:
-            from .storage import save_ping_cache
-            save_ping_cache(self._ping_map)
-        except Exception as e:
-            log.warning("Failed to persist ping cache: %s", e)
         return json.dumps({"done": total, "total": total})
 
     def clear_ping(self) -> str:
@@ -1167,6 +1144,11 @@ class JSApi:
             clear_ping_cache()
         except Exception as e:
             log.warning("Failed to clear ping cache: %s", e)
+        try:
+            from .storage import clear_ping_ms
+            clear_ping_ms()
+        except Exception as e:
+            log.warning("Failed to clear ping_ms: %s", e)
         log.info("Ping results cleared")
         return json.dumps({"ok": True})
 
@@ -1179,27 +1161,8 @@ class JSApi:
         return json.dumps({"map": {k: v for k, v in self._ping_session.items()}})
 
     def get_ping_stats(self) -> str:
-        from .storage import get_all_configs
-
-        rows = get_all_configs()
-        counts = {"fast": 0, "mid": 0, "slow": 0, "dead": 0, "untested": 0, "total": len(rows)}
-        for cfg in rows:
-            server = (cfg.get("server") or "").strip()
-            port = int(cfg.get("port", 0) or 0)
-            if not server or port <= 0:
-                continue
-            ms = self._ping_map.get(f"{server}:{port}")
-            if ms is None:
-                counts["untested"] += 1
-            elif ms < 0:
-                counts["dead"] += 1
-            elif ms < 150:
-                counts["fast"] += 1
-            elif ms < 300:
-                counts["mid"] += 1
-            else:
-                counts["slow"] += 1
-        return json.dumps(counts)
+        from .storage import get_ping_stats_sql
+        return json.dumps(get_ping_stats_sql())
 
     def get_ping_progress(self) -> str:
         pb = getattr(self, "_ping_build", {"done": 0, "total": 0, "results": []})

@@ -104,21 +104,34 @@ def init_db():
         _reset_db_file()
         conn = _get_conn()
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS configs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                protocol TEXT NOT NULL,
-                protocol_type TEXT NOT NULL,
-                name TEXT,
-                server TEXT,
-                port INTEGER,
-                raw TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+                CREATE TABLE IF NOT EXISTS configs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    protocol TEXT NOT NULL,
+                    protocol_type TEXT NOT NULL,
+                    name TEXT,
+                    server TEXT,
+                    port INTEGER,
+                    raw TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    ping_ms INTEGER
+                )
+            """)
         try:
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_configs_dedup ON configs (protocol_type, server, port)")
         except Exception as e:
             log.debug("Dedup index already exists: %s", e)
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_configs_server_port ON configs (server, port)")
+        except Exception as e:
+            log.debug("Server/port index failed: %s", e)
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_configs_ping_ms ON configs (ping_ms)")
+        except Exception as e:
+            log.debug("Ping_ms index failed: %s", e)
+        try:
+            conn.execute("ALTER TABLE configs ADD COLUMN ping_ms INTEGER")
+        except sqlite3.OperationalError:
+            pass
 
         try:
             conn.execute("ALTER TABLE configs ADD COLUMN expires_at TEXT")
@@ -218,7 +231,7 @@ def save_configs(configs: List[Dict]) -> int:
                 cfg.get("protocol", ""),
                 cfg.get("protocol_type", ""),
                 cfg.get("name", ""),
-                cfg.get("server", ""),
+                (cfg.get("server", "") or "").strip(),
                 cfg.get("port", 0),
                 cfg.get("raw", ""),
                 cfg.get("expires_at", ""),
@@ -282,6 +295,7 @@ def search_configs(
     offset: int = 0,
     limit: int = 1000,
     countries: Optional[list] = None,
+    ping_cats: Optional[set] = None,
 ):
     _ensure_db()
     where_ts, ts_params = _time_where()
@@ -297,6 +311,22 @@ def search_configs(
         ph = ",".join("?" * len(countries))
         where.append(f"COALESCE(country, '') IN ({ph})")
         params.extend(countries)
+
+    if ping_cats:
+        cats = set(ping_cats)
+        branches = []
+        if "untested" in cats:
+            branches.append("ping_ms IS NULL")
+        if "dead" in cats:
+            branches.append("ping_ms IS NOT NULL AND ping_ms < 0")
+        if "fast" in cats:
+            branches.append("ping_ms >= 0 AND ping_ms < 150")
+        if "mid" in cats:
+            branches.append("ping_ms >= 150 AND ping_ms < 300")
+        if "slow" in cats:
+            branches.append("ping_ms IS NOT NULL AND ping_ms >= 300")
+        if branches:
+            where.append("(" + " OR ".join(branches) + ")")
 
     q = (query or "").strip()
     if q:
@@ -322,10 +352,18 @@ def search_configs(
 
     conn = _get_conn()
     total = conn.execute(f"SELECT COUNT(*) FROM configs WHERE {wh}", params).fetchone()[0]
-    rows = conn.execute(
-        f"SELECT * FROM configs WHERE {wh}{order} LIMIT ? OFFSET ?",
-        params + [int(limit), int(offset)],
-    ).fetchall()
+    limit_n = int(limit)
+    offset_n = int(offset)
+    if limit_n <= 0:
+        rows = conn.execute(
+            f"SELECT * FROM configs WHERE {wh}{order}",
+            params,
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT * FROM configs WHERE {wh}{order} LIMIT ? OFFSET ?",
+            params + [limit_n, offset_n],
+        ).fetchall()
     conn.close()
     return [dict(row) for row in rows], total
 
@@ -475,6 +513,84 @@ def clear_ping_cache():
     conn.execute("DELETE FROM ping_cache")
     conn.commit()
     conn.close()
+
+
+def update_ping_ms(entries: Dict[str, int]) -> int:
+    """Write per-server ping results onto the configs table (column ping_ms)."""
+    if not entries:
+        return 0
+    _ensure_db()
+    rows = []
+    for key, ms in entries.items():
+        try:
+            server, _, port = key.rpartition(":")
+            if not server or not port.isdigit():
+                continue
+            rows.append((int(ms), server, int(port)))
+        except (ValueError, TypeError):
+            continue
+    if not rows:
+        return 0
+    conn = _get_conn()
+    try:
+        with _db_lock:
+            conn.executemany(
+                "UPDATE configs SET ping_ms = ? WHERE server = ? AND port = ?",
+                rows,
+            )
+            conn.commit()
+        return conn.total_changes
+    except Exception as e:
+        log.warning("Failed to update ping_ms: %s", e)
+        conn.rollback()
+        return 0
+    finally:
+        conn.close()
+
+
+def clear_ping_ms():
+    _ensure_db()
+    conn = _get_conn()
+    try:
+        with _db_lock:
+            conn.execute("UPDATE configs SET ping_ms = NULL")
+            conn.commit()
+    except Exception as e:
+        log.warning("Failed to clear ping_ms: %s", e)
+    finally:
+        conn.close()
+
+
+def get_ping_stats_sql() -> Dict[str, int]:
+    """Fast SQL-based ping stats matching the old in-Python get_ping_stats."""
+    _ensure_db()
+    where_ts, ts_params = _time_where()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT "
+            "SUM(CASE WHEN ping_ms IS NULL THEN 1 ELSE 0 END) AS untested, "
+            "SUM(CASE WHEN ping_ms IS NOT NULL AND ping_ms < 0 THEN 1 ELSE 0 END) AS dead, "
+            "SUM(CASE WHEN ping_ms >= 0 AND ping_ms < 150 THEN 1 ELSE 0 END) AS fast, "
+            "SUM(CASE WHEN ping_ms >= 150 AND ping_ms < 300 THEN 1 ELSE 0 END) AS mid, "
+            "SUM(CASE WHEN ping_ms IS NOT NULL AND ping_ms >= 300 THEN 1 ELSE 0 END) AS slow, "
+            "COUNT(*) AS total "
+            "FROM configs WHERE " + where_ts,
+            ts_params,
+        ).fetchone()
+    except Exception as e:
+        log.warning("get_ping_stats_sql failed: %s", e)
+        return {"fast": 0, "mid": 0, "slow": 0, "dead": 0, "untested": 0, "total": 0}
+    finally:
+        conn.close()
+    return {
+        "fast": int(row["fast"] or 0),
+        "mid": int(row["mid"] or 0),
+        "slow": int(row["slow"] or 0),
+        "dead": int(row["dead"] or 0),
+        "untested": int(row["untested"] or 0),
+        "total": int(row["total"] or 0),
+    }
 
 
 _DEAD_LINKS_PATH = os.path.join(BASE_DIR, "dead_links.json")
