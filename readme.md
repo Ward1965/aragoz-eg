@@ -1,28 +1,31 @@
 # Aragoz Lite
 
-**Aragoz Lite** is a lightweight desktop app that discovers, fetches, parses, organizes and exports proxy / VPN configs (VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC, WireGuard, SOCKS, HTTP/S and more) from subscriptions, GitHub sources, Telegram channels and the open web — all in one place.
+**Aragoz Lite** is a lightweight, dark-first desktop app that discovers, fetches, parses, organizes and exports proxy / VPN configs — from subscriptions, GitHub sources, Telegram channels and the open web, all in one place.
 
-Built with **pywebview** (native window + HTML/CSS/JS UI) — no Electron, no heavyweight framework.
+Built with **pywebview** (native window + HTML/CSS/JS UI) — no Electron, no heavy frameworks.
 
-![Dark mode UI](https://img.shields.io/badge/theme-dark-blueviolet)
+![Theme](https://img.shields.io/badge/theme-dark-blueviolet)
 ![Python](https://img.shields.io/badge/python-3.10%2B-informational)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
+![Version](https://img.shields.io/badge/latest-v1.4.1-green)
 
 ---
 
 ## Features
 
-- **Scan Web (Auto)** — discovers new config sources from GitHub repositories / raw files, Google and DuckDuckGo search results (`MAX_DISCOVERED_URLS = 400`).
+- **Scan Web (Auto)** — discovers new config sources from GitHub repositories / raw files plus Google and DuckDuckGo results (`MAX_DISCOVERED_URLS = 400`).
+- **Instant discovery results** — on force-stop, the discovered source list appears immediately (no waiting for the scan to finish), with **Copy All** and per-item copy buttons.
 - **Smart source registry** — verified sources (`good_sources.json`) are reused across scans so results stay stable and grow over time.
-- **Fetch URLs / subscriptions** — paste one link or a list; plain text and Base64 subscription payloads are decoded automatically.
+- **Fetch URLs / subscriptions** — paste one link or a batch; plain text and Base64 subscription payloads are decoded automatically.
 - **Telegram channels** — fetch and expand config links from Telegram channel pages.
 - **Import** — from a local file or raw pasted text.
-- **Protocol parsing & dedup** — URI parsers for every major protocol, plus structured parsers for **Clash YAML** and **Sing-box JSON** sources; duplicates are removed and each config keeps its original source attribution.
+- **Protocol parsing & dedup** — URI parsers for every major protocol plus structured parsers for **Clash YAML** and **Sing-box JSON**; duplicates are removed and each config keeps its original source attribution.
 - **Live table** — search as you type, filter by protocol / country / ping status, per-protocol counts, details modal, QR code, one-click copy.
-- **Latency tests** — ping one config or *Ping All* on the currently filtered scope (async, batched).
-- **Export** — copy as text, Base64 subscription, or save to file (per filtered selection).
-- **Dark-first UI** — clean dark theme (light toggle available), keyboard shortcuts, single-instance guard, sudden white-flash-free native window.
-- **Clean start** — fresh DB, ping and dead-link caches on every launch (you always start from a clean table).
+- **Latency tests** — ping one config or *Ping All* on the currently filtered scope (async, batched, up to 800 workers).
+- **SQL-backed ping engine (v1.4.1)** — ping results are stored per-row with indexed columns, so live stats and filtering are computed in SQL instead of scanning in Python (~13× faster on 250k configs), and filters stay live during a full ping.
+- **Export** — copy as text, Base64 subscription, or save to file (per filtered selection) — TXT / B64 / JSON / Clash YAML.
+- **Polished UX** — glass-style welcome window, **boot splash image** while the app starts, clean dark theme (light toggle), keyboard shortcuts, single-instance guard, white-flash-free native window, rounded-corner welcome overlay.
+- **Clean start** — fresh DB, ping and dead-link caches on every launch (you always begin from a clean table).
 
 ## Supported protocols & formats
 
@@ -35,7 +38,7 @@ Built with **pywebview** (native window + HTML/CSS/JS UI) — no Electron, no he
 | `socks://`, `socks4://`, `socks5://` | OpenVPN, SSH, IKEv2, L2TP, PPTP, SoftEther |
 
 - **Structured sources:** Clash YAML (`proxies:`) and Sing-box JSON (v2/v1 `outbounds`).
-- **Metadata extraction:** country (server/ISO lookup), expiry dates (ISO / timestamp), remarks, and per-source attribution.
+- **Metadata extraction:** country (server/ISO lookup), expiry dates (ISO / timestamp), remarks, per-source attribution.
 - Configs older than **30 days** (by `expires_at`) are filtered out on read.
 
 ## Requirements
@@ -46,8 +49,8 @@ Built with **pywebview** (native window + HTML/CSS/JS UI) — no Electron, no he
 ## Run from source
 
 ```bash
-git clone https://github.com/Ward1965/aragoz.git
-cd aragoz
+git clone https://github.com/Ward1965/aragoz-eg.git
+cd aragoz-lite
 pip install -r requirements.txt
 python main.py
 ```
@@ -61,6 +64,16 @@ python main.py
 
 The project ships a cross-platform PyInstaller spec (`Aragoz Lite.spec`) and a CI workflow that builds all three targets automatically.
 
+### GitHub Actions (recommended)
+
+Pushing a release tag (`v*`) builds **Windows**, **macOS (arm64)** and **Linux** on native runners and attaches the artifacts to a GitHub Release. See [`.github/workflows/build.yml`](.github/workflows/build.yml).
+
+| Platform | Artifact |
+|---|---|
+| Windows x64 | `AragozLite-<ver>-windows-x64.exe` (signed, with boot splash) |
+| macOS Apple Silicon | `AragozLite-<ver>-macos-arm64.zip` |
+| Linux x64 | `AragozLite-<ver>-linux-x64.tar.gz` |
+
 ### Locally with PyInstaller
 
 ```bash
@@ -69,14 +82,10 @@ pyinstaller --noconfirm "Aragoz Lite.spec"
 ```
 
 - **Windows** → `dist/Aragoz Lite.exe` (single file, no console).
-- **macOS** (Intel or Apple Silicon) → `dist/Aragoz Lite` (single-file Mach-O binary). Build it **on** macOS.
-- **Linux** → `dist/Aragoz Lite` (single-file ELF binary). Build it **on** Linux with the GTK/WebKit dev packages installed.
+- **macOS** (Intel or Apple Silicon) → `dist/Aragoz Lite` (single-file binary). Build it **on** macOS.
+- **Linux** → `dist/Aragoz Lite` (single-file binary). Build it **on** Linux with the GTK/WebKit dev packages installed.
 
 > One-file mode uses `_MEIPASS` for frontend assets; DBs/logs are written next to the executable on Windows/Linux and under `~/Library/Application Support/Aragoz Lite` on macOS.
-
-### GitHub Actions (recommended)
-
-Pushing a release tag (or any push with workflow dispatch) builds **Windows**, **macOS (arm64)** and **Linux** on native runners and attaches the artifacts/release. See [`.github/workflows/build.yml`](.github/workflows/build.yml).
 
 ## Keyboard shortcuts
 
@@ -93,7 +102,7 @@ Pushing a release tag (or any push with workflow dispatch) builds **Windows**, *
 
 ```
 aragoZ-lite/
-├── main.py                 # pywebview entry: welcome window + main window (maximize on start)
+├── main.py                 # pywebview entry: welcome + main window (maximize on start)
 ├── Aragoz Lite.spec        # cross-platform PyInstaller spec
 ├── requirements.txt
 ├── backend/
