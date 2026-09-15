@@ -1,4 +1,8 @@
-# Aragoz Lite
+<p align="center">
+  <img src="aragoz.png" alt="Aragoz Lite" width="140" height="140">
+</p>
+
+<h1 align="center">Aragoz Lite</h1>
 
 **Aragoz Lite** is a lightweight, dark-first desktop app that discovers, fetches, parses, organizes and exports proxy / VPN configs — from subscriptions, GitHub sources, Telegram channels and the open web, all in one place.
 
