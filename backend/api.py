@@ -684,29 +684,20 @@ class JSApi:
             log.error("Cannot read file %s: %s", filepath, e)
             return json.dumps({"error": f"Cannot read file: {e}", "configs": []})
 
-        url_lines = []
-        config_lines = []
+        lines = []
         for line in content.splitlines():
             line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            lower = line.lower()
-            if re.match(r"^(vless|vmess|trojan|ssr|ss|hy2|hy1|hysteria2|hysteria|tuic|socks5|socks4|socks|wireguard|wg|naive\+https|naive\+h2|naive\+quic|ssh|ikev2|l2tp|pptp|softether)://", lower):
-                config_lines.append(line)
-            elif lower.startswith(("http://", "https://")):
-                url_lines.append(line)
-            else:
-                config_lines.append(line)
+            if line and not line.startswith("#"):
+                lines.append(line)
 
+        # حفظ على دفعات صغيرة حتى يتحرك العداد والصفوف تدريجيًا
         errors = []
-        # 1) حفظ سطور الكونفيغ المحلية من الملف على دفعات صغيرة
-        #    حتى تُعرض الصفوف في الجدول والعداد بشكل تدريجي أثناء الاستيراد
-        if config_lines:
-            total_lines = len(config_lines)
+        if lines:
+            total_lines = len(lines)
             chunk_size = max(200, total_lines // 200)
             saved_local = 0
             for i in range(0, total_lines, chunk_size):
-                chunk = config_lines[i:i + chunk_size]
+                chunk = lines[i:i + chunk_size]
                 parsed = parse_all(chunk)
                 if parsed:
                     saved_local += save_configs(parsed)
@@ -715,29 +706,8 @@ class JSApi:
                     "importing", written, total_lines,
                     f"Importing configs from file ({written}/{total_lines})",
                 )
-            log.info("Import: saved %d configs from local file lines", saved_local)
+            log.info("Import: saved %d configs from file", saved_local)
 
-        # 2) جلب الروابط بحفظ تدريجي أثناء وصول كل دفعة (العداد يتحدث حيًا)
-        if url_lines:
-            if not has_internet():
-                errors.append("No internet connection - skipped URL fetching (offline)")
-                log.info("Import: no internet - skipping %d URL lines", len(url_lines))
-            else:
-                self._set_progress("importing", 0, len(url_lines), "Fetching URLs from file")
-
-                def fetch_progress(current, total):
-                    self._set_progress("importing", current, total, "Fetching URLs from file")
-
-                active_urls = [u for u in url_lines if not is_dead_link(u)]
-                self._dead_skipped += len(url_lines) - len(active_urls)
-                data = json.loads(self._process_sources(
-                    active_urls,
-                    fetch_progress=fetch_progress,
-                    cancel_check=lambda: self._cancelled,
-                ))
-                errors += data.get("errors") or []
-
-        self._set_progress("importing", 1, 1, "Done")
         total = get_config_count()
         self._configs = []
         log.info("Import complete: %d configs total", total)
