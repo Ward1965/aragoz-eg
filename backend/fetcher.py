@@ -2,6 +2,7 @@ import asyncio
 import base64
 import datetime
 import email.utils
+import socket
 import aiohttp
 from typing import List, Dict, Optional, Tuple
 
@@ -25,6 +26,20 @@ DEFAULT_TIMEOUT = 30
 DEFAULT_RETRIES = 2
 DEFAULT_RETRY_DELAY = 0.5
 CHUNK_SIZE = 32
+INTERNET_PROBE_HOSTS = (("1.1.1.1", 53), ("8.8.8.8", 53), ("github.com", 443))
+
+
+def has_internet(timeout: float = 2.0) -> bool:
+    """فحص سريع لوجود اتصال بالشبكة دون إجراء عمليات HTTP حقيقية."""
+    for host, port in INTERNET_PROBE_HOSTS:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            continue
+        except Exception:
+            continue
+    return False
 
 
 def _parse_last_modified(header: str) -> Optional[datetime.datetime]:
